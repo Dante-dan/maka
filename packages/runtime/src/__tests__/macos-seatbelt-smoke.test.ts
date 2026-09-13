@@ -33,9 +33,15 @@ import {
 } from '@maka/core/permission-profile';
 
 import { MACOS_SEATBELT_EXECUTABLE, MacosSeatbeltBackend } from '../sandbox/macos-seatbelt.js';
+import { resolveMacosCommandPaths } from '../sandbox/macos-command-paths.js';
 import { SandboxManager } from '../sandbox/sandbox-manager.js';
 
 const canRunSeatbelt = process.platform === 'darwin' && existsSync(MACOS_SEATBELT_EXECUTABLE);
+const selectedDeveloperDirectory =
+  process.platform === 'darwin'
+    ? spawnSync('/usr/bin/xcode-select', ['-p'], { encoding: 'utf8' }).stdout.trim()
+    : '';
+const canRunAppleClt = selectedDeveloperDirectory.endsWith('/CommandLineTools');
 
 async function makeWorkspace(): Promise<string> {
   return realpath(await mkdtemp(join(tmpdir(), 'maka-seatbelt-workspace-')));
@@ -69,6 +75,11 @@ function runSeatbeltCommand(
   command: string,
   profile: PermissionProfile = createWorkspaceWritePermissionProfile(),
   includeTempRoots = false,
+  runtimePaths: {
+    executableRoots?: readonly string[];
+    runtimeReadableFiles?: readonly string[];
+  } = {},
+  env: NodeJS.ProcessEnv = process.env,
 ) {
   const manager = new SandboxManager([new MacosSeatbeltBackend()]);
   const result = manager.transform({
@@ -81,6 +92,7 @@ function runSeatbeltCommand(
       pathContext: {
         workspaceRoots: [workspaceRoot],
         ...(includeTempRoots ? { tmpdir: tmpdir(), slashTmp: '/tmp' } : {}),
+        ...runtimePaths,
       },
     },
   });
@@ -90,7 +102,7 @@ function runSeatbeltCommand(
 
   return spawnSync(result.exec.argv[0], result.exec.argv.slice(1), {
     cwd: result.exec.cwd,
-    env: { ...process.env, ...result.exec.env },
+    env: { ...env, ...result.exec.env },
     encoding: 'utf8',
   });
 }
@@ -144,6 +156,58 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
     );
 
     assert.equal(child.status, 0, child.stderr);
+  });
+
+  it('runs Apple Git with the selected CLT and preserves global ignore semantics', {
+    skip: !canRunAppleClt,
+  }, async () => {
+    const workspaceRoot = await makeWorkspace();
+    const configRoot = await realpath(await mkdtemp(join(tmpdir(), 'maka-git-config-')));
+    const globalConfig = join(configRoot, 'config');
+    const includedConfig = join(configRoot, 'included.config');
+    const globalIgnore = join(configRoot, 'global.ignore');
+    cleanup.push(workspaceRoot, configRoot);
+    await writeFile(
+      globalConfig,
+      `[include]\n\tpath = ${includedConfig}\n[core]\n\texcludesFile = ${globalIgnore}\n`,
+    );
+    await writeFile(includedConfig, '[user]\n\tname = Maka Test\n');
+    await writeFile(globalIgnore, '*.secret\n');
+    await writeFile(join(workspaceRoot, 'ignored.secret'), 'ignored\n');
+    await writeFile(join(workspaceRoot, 'visible.txt'), 'visible\n');
+    const gitEnvironment = {
+      ...process.env,
+      HOME: configRoot,
+      GIT_CONFIG_GLOBAL: globalConfig,
+    };
+    const setup = spawnSync('/usr/bin/git', ['init'], {
+      cwd: workspaceRoot,
+      env: gitEnvironment,
+      encoding: 'utf8',
+    });
+    assert.equal(setup.status, 0, setup.stderr);
+
+    const runtimePaths = resolveMacosCommandPaths(gitEnvironment, workspaceRoot);
+    assert.deepEqual(runtimePaths.executableRoots, [
+      join(selectedDeveloperDirectory, 'usr', 'lib'),
+    ]);
+    assert.deepEqual(
+      [...runtimePaths.runtimeReadableFiles].sort(),
+      [globalConfig, includedConfig, globalIgnore].sort(),
+    );
+
+    const child = runSeatbeltCommand(
+      workspaceRoot,
+      '/usr/bin/git status --short',
+      createWorkspaceWritePermissionProfile(),
+      true,
+      runtimePaths,
+      gitEnvironment,
+    );
+
+    assert.equal(child.status, 0, child.stderr);
+    assert.match(child.stdout, /\?\? visible\.txt/);
+    assert.doesNotMatch(child.stdout, /ignored\.secret/);
   });
 
   it('denies writes outside the workspace root', async () => {

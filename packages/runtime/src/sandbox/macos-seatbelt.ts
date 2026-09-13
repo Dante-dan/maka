@@ -224,6 +224,7 @@ interface ResolvedRoots {
   protectedWritableRoots: readonly string[];
   protectedMetadataNames: readonly string[];
   runtimeReadableRoots: readonly string[];
+  runtimeReadableFiles: readonly string[];
   executableRoots: readonly string[];
 }
 
@@ -242,6 +243,7 @@ export function buildSeatbeltPolicy(input: BuildSeatbeltPolicyInput): BuildSeatb
     ...roots.readableRoots.map((root, index) => `-DREADABLE_ROOT_${index}=${root.path}`),
     ...roots.writableRoots.map((root, index) => `-DWRITABLE_ROOT_${index}=${root.path}`),
     ...roots.runtimeReadableRoots.map((root, index) => `-DRUNTIME_READABLE_ROOT_${index}=${root}`),
+    ...roots.runtimeReadableFiles.map((path, index) => `-DRUNTIME_READABLE_FILE_${index}=${path}`),
     ...roots.executableRoots.map((root, index) => `-DEXECUTABLE_ROOT_${index}=${root}`),
   ];
 
@@ -316,6 +318,7 @@ function resolveRoots(profile: PermissionProfile, pathContext: SandboxPathContex
       protectedWritableRoots: [],
       protectedMetadataNames: [],
       runtimeReadableRoots: [],
+      runtimeReadableFiles: [],
       executableRoots: [],
     };
   }
@@ -360,6 +363,9 @@ function resolveRoots(profile: PermissionProfile, pathContext: SandboxPathContex
     protectedMetadataNames: profile.fileSystem.protectedMetadata?.names ?? [],
     runtimeReadableRoots: uniqueRoots(
       (pathContext.runtimeReadableRoots ?? []).map(resolveRootPath),
+    ),
+    runtimeReadableFiles: uniqueRoots(
+      (pathContext.runtimeReadableFiles ?? []).map(resolveRootPath),
     ),
     executableRoots: uniqueRoots((pathContext.executableRoots ?? []).map(resolveRootPath)),
   };
@@ -491,15 +497,28 @@ function buildWritableRootsPolicy(roots: ResolvedRoots): string {
 
 function buildRuntimeRootsPolicy(roots: ResolvedRoots): string {
   const sections: string[] = [];
+  const denyRequirements = deniedRootRequirements(roots.deniedRoots);
   if (roots.runtimeReadableRoots.length > 0) {
     const clauses = roots.runtimeReadableRoots
-      .map((_, index) => `  (subpath (param "RUNTIME_READABLE_ROOT_${index}"))`)
+      .map((_, index) =>
+        accessRootClause(`(subpath (param "RUNTIME_READABLE_ROOT_${index}"))`, denyRequirements),
+      )
+      .join('\n');
+    sections.push(`(allow file-read* file-test-existence\n${clauses})`);
+  }
+  if (roots.runtimeReadableFiles.length > 0) {
+    const clauses = roots.runtimeReadableFiles
+      .map((_, index) =>
+        accessRootClause(`(literal (param "RUNTIME_READABLE_FILE_${index}"))`, denyRequirements),
+      )
       .join('\n');
     sections.push(`(allow file-read* file-test-existence\n${clauses})`);
   }
   if (roots.executableRoots.length > 0) {
     const clauses = roots.executableRoots
-      .map((_, index) => `  (subpath (param "EXECUTABLE_ROOT_${index}"))`)
+      .map((_, index) =>
+        accessRootClause(`(subpath (param "EXECUTABLE_ROOT_${index}"))`, denyRequirements),
+      )
       .join('\n');
     sections.push(`(allow file-read* file-test-existence file-map-executable\n${clauses})`);
   }

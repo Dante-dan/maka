@@ -370,6 +370,41 @@ describe('buildSeatbeltPolicy', () => {
     }).policy;
     assert.match(policy, /\(require-not \(literal "\/outside\/locked\.txt"\)\)/);
   });
+
+  it('admits runtime files exactly, read-only, and subject to explicit deny', () => {
+    const profile: PermissionProfile = {
+      type: 'managed',
+      name: 'custom',
+      fileSystem: {
+        kind: 'restricted',
+        entries: [
+          { kind: 'special', access: 'write', special: ':workspace_roots' },
+          { kind: 'path', access: 'deny', path: '/outside/credentials', match: 'exact' },
+        ],
+      },
+      network: { kind: 'restricted' },
+    };
+    const result = buildSeatbeltPolicy({
+      profile,
+      pathContext: {
+        workspaceRoots: ['/repo'],
+        runtimeReadableFiles: ['/outside/config', '/outside/credentials'],
+        executableRoots: ['/outside/toolchain'],
+      },
+    });
+
+    assert.ok(result.definitionArgs.includes('-DRUNTIME_READABLE_FILE_0=/outside/config'));
+    assert.match(
+      result.policy,
+      /\(literal \(param "RUNTIME_READABLE_FILE_0"\)\)[\s\S]*\(require-not \(literal "\/outside\/credentials"\)\)/,
+    );
+    assert.doesNotMatch(result.policy, /file-write[^\n]*RUNTIME_READABLE_FILE/);
+    assert.doesNotMatch(result.policy, /subpath \(param "RUNTIME_READABLE_FILE/);
+    assert.match(
+      result.policy,
+      /\(subpath \(param "EXECUTABLE_ROOT_0"\)\)[\s\S]*\(require-not \(literal "\/outside\/credentials"\)\)/,
+    );
+  });
 });
 
 describe('createSeatbeltExecArgs', () => {
