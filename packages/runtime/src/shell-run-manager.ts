@@ -78,6 +78,7 @@ import {
   type ShellRunPtySnapshot,
   type ShellRunProcessManagerInput,
   type ShellRunHttpHealthCheckRequest,
+  type ShellRunHttpHealthAuthorization,
   type ShellRunWriteInput,
 } from './shell-run-contract.js';
 import {
@@ -275,6 +276,10 @@ export class ShellRunProcessManager
     input: ShellRunHttpHealthCheckRequest,
     signal: AbortSignal,
   ) => Promise<number>;
+  private readonly authorizeHttpHealth: (
+    input: ShellRunHttpHealthCheckRequest,
+    signal: AbortSignal,
+  ) => Promise<ShellRunHttpHealthAuthorization>;
   private readonly waitForHealthRetry: (delayMs: number) => Promise<void>;
   private reservedShellRuns = 0;
   private reservedPtyRuns = 0;
@@ -304,6 +309,8 @@ export class ShellRunProcessManager
         return () => clearTimeout(timer);
       });
     this.probeHttpHealth = input.probeHttpHealth ?? probeLoopbackHttpEndpoint;
+    this.authorizeHttpHealth =
+      input.authorizeHttpHealth ?? (async () => ({ kind: 'allowed' as const }));
     this.waitForHealthRetry =
       input.waitForHealthRetry ??
       ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
@@ -1657,7 +1664,7 @@ export class ShellRunProcessManager
     callerSignal?: AbortSignal,
   ): Promise<void> {
     const deadline = Date.now() + target.timeoutMs;
-    let lastFailure: 'connection_failed' | 'timeout' = 'connection_failed';
+    let lastFailure: ShellRunHealthCheck['failureReason'] = 'connection_failed';
     while (!live.driverExit && !live.finalizeOnce) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
@@ -1672,6 +1679,9 @@ export class ShellRunProcessManager
         return;
       }
       lastFailure = outcome.reason;
+      if (outcome.reason === 'privacy_mode' || outcome.reason === 'credential_not_configured') {
+        break;
+      }
       if (callerSignal?.aborted) throw abortError('Health check aborted before completion');
       if (Date.now() >= deadline) break;
       await this.waitForHealthRetry(Math.min(100, Math.max(0, deadline - Date.now())));
@@ -1726,11 +1736,15 @@ export class ShellRunProcessManager
     callerSignal?: AbortSignal,
   ): Promise<
     | { kind: 'response'; statusCode: number }
-    | { kind: 'failure'; reason: 'connection_failed' | 'timeout' }
+    | { kind: 'failure'; reason: NonNullable<ShellRunHealthCheck['failureReason']> }
   > {
     const timeoutSignal = AbortSignal.timeout(Math.max(1, timeoutMs));
     const signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
     try {
+      const authorization = await this.authorizeHttpHealth(target, signal);
+      if (authorization.kind === 'blocked') {
+        return { kind: 'failure', reason: authorization.reason };
+      }
       return { kind: 'response', statusCode: await this.probeHttpHealth(target, signal) };
     } catch (error) {
       if (callerSignal?.aborted) throw error;

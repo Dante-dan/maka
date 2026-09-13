@@ -86,9 +86,18 @@ export interface ShellRunProcessManagerInput {
   scheduleTimeout?: (run: () => void, delayMs: number) => () => void;
   /** Performs one HTTP readiness probe; injected for deterministic tests. */
   probeHttpHealth?: (input: ShellRunHttpHealthCheckRequest, signal: AbortSignal) => Promise<number>;
+  /** Applies the host's current privacy/credential policy before a readiness probe. */
+  authorizeHttpHealth?: (
+    input: ShellRunHttpHealthCheckRequest,
+    signal: AbortSignal,
+  ) => Promise<ShellRunHttpHealthAuthorization>;
   /** Waits between readiness probes; injected for deterministic tests. */
   waitForHealthRetry?: (delayMs: number) => Promise<void>;
 }
+
+export type ShellRunHttpHealthAuthorization =
+  | { kind: 'allowed' }
+  | { kind: 'blocked'; reason: 'privacy_mode' | 'credential_not_configured' };
 
 export interface ShellRunHttpHealthCheckRequest {
   kind: 'http';

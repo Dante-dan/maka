@@ -337,6 +337,48 @@ describe('ShellRunProcessManager', () => {
     await manager.stopBackgroundTask('session-1', result.ref, NO_ABORT);
   });
 
+  test('persists native PID and safe Host-policy failures without probing the network', async () => {
+    for (const reason of ['privacy_mode', 'credential_not_configured'] as const) {
+      const cwd = await workspace();
+      const store = sqliteShellRunStore(cwd);
+      let probes = 0;
+      const manager = createManager(store, undefined, {
+        authorizeHttpHealth: async () => ({ kind: 'blocked', reason }),
+        probeHttpHealth: async () => {
+          probes += 1;
+          throw new Error('policy-blocked probes must not reach the network');
+        },
+      });
+      const result = await manager.runBackgroundBash(
+        shellInput({
+          cwd,
+          command: 'sleep 10',
+          healthCheck: {
+            kind: 'http',
+            host: '127.0.0.1',
+            port: 8765,
+            path: '/health',
+            timeoutMs: 1_000,
+          },
+        }),
+      );
+      assertShellRun(result);
+      assert.equal(result.status, 'running');
+      assert.ok(result.pid && result.pid > 0);
+      assert.equal(result.healthCheck?.status, 'unreachable');
+      assert.equal(result.healthCheck?.failureReason, reason);
+      assert.equal(probes, 0);
+
+      const [durable] = await store.listSessionShellRuns('session-1');
+      assert.ok(durable);
+      assert.equal(durable.pid, result.pid);
+      assert.equal(durable.status, 'running');
+      assert.equal(durable.healthCheck?.failureReason, reason);
+      assert.doesNotMatch(JSON.stringify(durable), /credentialId|secret|proxy/i);
+      await manager.stopBackgroundTask('session-1', result.ref, NO_ABORT);
+    }
+  });
+
   test('accepts only credential-free HTTP loopback health targets with an explicit port', () => {
     assert.deepEqual(parseShellRunHttpHealthCheck('http://[::1]:8765/health', 250), {
       kind: 'http',
@@ -2987,6 +3029,7 @@ function createManager(
     scheduleTimeout?: ShellRunProcessManagerInput['scheduleTimeout'];
     probeHttpHealth?: ShellRunProcessManagerInput['probeHttpHealth'];
     waitForHealthRetry?: ShellRunProcessManagerInput['waitForHealthRetry'];
+    authorizeHttpHealth?: ShellRunProcessManagerInput['authorizeHttpHealth'];
   } = {},
 ): ShellRunProcessManager {
   let id = 0;

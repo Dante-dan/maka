@@ -95,7 +95,12 @@ export interface ShellRunHealthCheck {
   status: ShellRunHealthStatus;
   checkedAt?: number;
   httpStatus?: number;
-  failureReason?: 'connection_failed' | 'timeout' | 'process_exited';
+  failureReason?:
+    | 'connection_failed'
+    | 'timeout'
+    | 'process_exited'
+    | 'privacy_mode'
+    | 'credential_not_configured';
 }
 
 export interface PipeShellOutput {
@@ -655,7 +660,9 @@ export function isShellRunHealthCheck(value: unknown): value is ShellRunHealthCh
     check.httpStatus === undefined &&
     (check.failureReason === 'connection_failed' ||
       check.failureReason === 'timeout' ||
-      check.failureReason === 'process_exited')
+      check.failureReason === 'process_exited' ||
+      check.failureReason === 'privacy_mode' ||
+      check.failureReason === 'credential_not_configured')
   );
 }
 
