@@ -19,13 +19,26 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  createReadOnlyPermissionProfile,
+  createWorkspaceWritePermissionProfile,
+} from '@maka/core/permission-profile';
+
+import {
+  resolveMacosCommandPaths,
   resolveMacosDeveloperExecutableRoots,
-  resolveMacosGitReadableFiles,
 } from '../sandbox/macos-command-paths.js';
 
 describe('resolveMacosDeveloperExecutableRoots', () => {
@@ -110,6 +123,30 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     assert.equal(selected, false);
   });
 
+  it('returns a canonical root that is unaffected by later selector alias replacement', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-replaced-selection-'));
+    const first = join(scratch, 'first', 'CommandLineTools');
+    const second = join(scratch, 'second', 'CommandLineTools');
+    const alias = join(scratch, 'selected');
+    for (const developer of [first, second]) {
+      const library = join(developer, 'usr', 'lib');
+      mkdirSync(library, { recursive: true });
+      writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
+    }
+    symlinkSync(first, alias);
+    try {
+      const roots = resolveMacosDeveloperExecutableRoots({
+        developerDir: alias,
+        validateAppleBinary: () => true,
+      });
+      unlinkSync(alias);
+      symlinkSync(second, alias);
+      assert.deepEqual(roots, [realpathSync(join(first, 'usr', 'lib'))]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a structurally plausible toolchain whose libxcrun is not Apple-signed', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-unsigned-clt-'));
     const developer = join(scratch, 'CommandLineTools');
@@ -124,63 +161,48 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
   });
 });
 
-describe('resolveMacosGitReadableFiles', () => {
-  it('returns exact active config, included config, and global excludes files', () => {
-    const scratch = mkdtempSync(join(tmpdir(), 'maka-git-config-'));
-    const config = join(scratch, 'global.config');
-    const included = join(scratch, 'included.config');
-    const excludes = join(scratch, 'global.ignore');
-    writeFileSync(
-      config,
-      `[include]\n\tpath = ${included}\n[core]\n\texcludesFile = ${excludes}\n`,
-    );
-    writeFileSync(included, '[user]\n\tname = Maka Test\n');
-    writeFileSync(excludes, '*.secret\n');
+describe('resolveMacosCommandPaths', () => {
+  it('does not add selected developer roots to restricted read-only profiles', () => {
+    let validated = false;
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-read-only-toolchain-'));
+    const developer = join(scratch, 'CommandLineTools');
+    const library = join(developer, 'usr', 'lib');
+    mkdirSync(library, { recursive: true });
+    writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
     try {
       assert.deepEqual(
-        [
-          ...resolveMacosGitReadableFiles(
-            { ...process.env, HOME: scratch, GIT_CONFIG_GLOBAL: config },
-            scratch,
-          ),
-        ].sort(),
-        [config, included, excludes].map((path) => realpathSync(path)).sort(),
+        resolveMacosCommandPaths(
+          createReadOnlyPermissionProfile(),
+          { DEVELOPER_DIR: developer },
+          {
+            validateAppleBinary: () => {
+              validated = true;
+              return true;
+            },
+          },
+        ),
+        { executableRoots: [] },
       );
+      assert.equal(validated, false);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
   });
 
-  it('does not admit missing referenced files', () => {
-    const scratch = mkdtempSync(join(tmpdir(), 'maka-git-config-missing-'));
-    const config = join(scratch, 'global.config');
-    writeFileSync(config, `[include]\n\tpath = ${join(scratch, 'missing.config')}\n`);
+  it('adds only validated developer roots to writable command profiles', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-writable-toolchain-'));
+    const developer = join(scratch, 'CommandLineTools');
+    const library = join(developer, 'usr', 'lib');
+    mkdirSync(library, { recursive: true });
+    writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
     try {
       assert.deepEqual(
-        resolveMacosGitReadableFiles(
-          { ...process.env, HOME: scratch, GIT_CONFIG_GLOBAL: config },
-          scratch,
+        resolveMacosCommandPaths(
+          createWorkspaceWritePermissionProfile(),
+          { DEVELOPER_DIR: developer },
+          { validateAppleBinary: () => true },
         ),
-        [realpathSync(config)],
-      );
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
-    }
-  });
-
-  it('does not admit credential stores named by Git helpers', () => {
-    const scratch = mkdtempSync(join(tmpdir(), 'maka-git-credentials-'));
-    const config = join(scratch, 'global.config');
-    const credentials = join(scratch, '.git-credentials');
-    writeFileSync(config, '[credential]\n\thelper = store\n');
-    writeFileSync(credentials, 'https://token@example.test\n');
-    try {
-      assert.deepEqual(
-        resolveMacosGitReadableFiles(
-          { ...process.env, HOME: scratch, GIT_CONFIG_GLOBAL: config },
-          scratch,
-        ),
-        [realpathSync(config)],
+        { executableRoots: [realpathSync(library)] },
       );
     } finally {
       rmSync(scratch, { recursive: true, force: true });

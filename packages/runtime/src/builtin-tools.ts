@@ -818,7 +818,11 @@ function sandboxCommand(
     });
   }
   const onCompletion = preparedProfilePathCompletion(preparedProfile.paths);
-  const macosPaths = platform === 'darwin' ? resolveMacosCommandPaths(env, cwd) : undefined;
+  // Discovery is deliberately adjacent to policy construction. The selected
+  // path is canonicalized and code-sign validated, but is not fd-pinned;
+  // replacement after this point remains a documented residual limitation.
+  const macosPaths =
+    platform === 'darwin' ? resolveMacosCommandPaths(effective.profile, env) : undefined;
 
   let result: ReturnType<SandboxManager['transform']>;
   try {
@@ -840,7 +844,6 @@ function sandboxCommand(
                   ...macosRuntimeExecutableRoots(process.execPath),
                   ...macosPaths.executableRoots,
                 ],
-                runtimeReadableFiles: macosPaths.runtimeReadableFiles,
               }
             : {}),
           ...(platform === 'linux'

@@ -77,7 +77,6 @@ function runSeatbeltCommand(
   includeTempRoots = false,
   runtimePaths: {
     executableRoots?: readonly string[];
-    runtimeReadableFiles?: readonly string[];
   } = {},
   env: NodeJS.ProcessEnv = process.env,
 ) {
@@ -158,27 +157,16 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
     assert.equal(child.status, 0, child.stderr);
   });
 
-  it('runs Apple Git with the selected CLT and preserves global ignore semantics', {
+  it('starts Apple Git with the selected CLT without host-side Git config discovery', {
     skip: !canRunAppleClt,
   }, async () => {
     const workspaceRoot = await makeWorkspace();
-    const configRoot = await realpath(await mkdtemp(join(tmpdir(), 'maka-git-config-')));
-    const globalConfig = join(configRoot, 'config');
-    const includedConfig = join(configRoot, 'included.config');
-    const globalIgnore = join(configRoot, 'global.ignore');
-    cleanup.push(workspaceRoot, configRoot);
-    await writeFile(
-      globalConfig,
-      `[include]\n\tpath = ${includedConfig}\n[core]\n\texcludesFile = ${globalIgnore}\n`,
-    );
-    await writeFile(includedConfig, '[user]\n\tname = Maka Test\n');
-    await writeFile(globalIgnore, '*.secret\n');
-    await writeFile(join(workspaceRoot, 'ignored.secret'), 'ignored\n');
+    const emptyHome = await realpath(await mkdtemp(join(tmpdir(), 'maka-git-home-')));
+    cleanup.push(workspaceRoot, emptyHome);
     await writeFile(join(workspaceRoot, 'visible.txt'), 'visible\n');
     const gitEnvironment = {
       ...process.env,
-      HOME: configRoot,
-      GIT_CONFIG_GLOBAL: globalConfig,
+      HOME: emptyHome,
     };
     const setup = spawnSync('/usr/bin/git', ['init'], {
       cwd: workspaceRoot,
@@ -187,14 +175,13 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
     });
     assert.equal(setup.status, 0, setup.stderr);
 
-    const runtimePaths = resolveMacosCommandPaths(gitEnvironment, workspaceRoot);
+    const runtimePaths = resolveMacosCommandPaths(
+      createWorkspaceWritePermissionProfile(),
+      gitEnvironment,
+    );
     assert.deepEqual(runtimePaths.executableRoots, [
       join(selectedDeveloperDirectory, 'usr', 'lib'),
     ]);
-    assert.deepEqual(
-      [...runtimePaths.runtimeReadableFiles].sort(),
-      [globalConfig, includedConfig, globalIgnore].sort(),
-    );
 
     const child = runSeatbeltCommand(
       workspaceRoot,
@@ -207,7 +194,6 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
 
     assert.equal(child.status, 0, child.stderr);
     assert.match(child.stdout, /\?\? visible\.txt/);
-    assert.doesNotMatch(child.stdout, /ignored\.secret/);
   });
 
   it('denies writes outside the workspace root', async () => {

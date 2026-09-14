@@ -371,7 +371,12 @@ describe('buildSeatbeltPolicy', () => {
     assert.match(policy, /\(require-not \(literal "\/outside\/locked\.txt"\)\)/);
   });
 
-  it('admits runtime files exactly, read-only, and subject to explicit deny', () => {
+  it('keeps executable roots subject to canonicalized exact and parent denies', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-seatbelt-runtime-deny-'));
+    const toolchain = join(scratch, 'toolchain');
+    const alias = join(scratch, 'alias');
+    mkdirSync(toolchain);
+    symlinkSync(toolchain, alias);
     const profile: PermissionProfile = {
       type: 'managed',
       name: 'custom',
@@ -379,31 +384,29 @@ describe('buildSeatbeltPolicy', () => {
         kind: 'restricted',
         entries: [
           { kind: 'special', access: 'write', special: ':workspace_roots' },
-          { kind: 'path', access: 'deny', path: '/outside/credentials', match: 'exact' },
+          { kind: 'path', access: 'deny', path: alias, match: 'exact' },
+          { kind: 'path', access: 'deny', path: scratch, match: 'subtree' },
         ],
       },
       network: { kind: 'restricted' },
     };
-    const result = buildSeatbeltPolicy({
-      profile,
-      pathContext: {
-        workspaceRoots: ['/repo'],
-        runtimeReadableFiles: ['/outside/config', '/outside/credentials'],
-        executableRoots: ['/outside/toolchain'],
-      },
-    });
-
-    assert.ok(result.definitionArgs.includes('-DRUNTIME_READABLE_FILE_0=/outside/config'));
-    assert.match(
-      result.policy,
-      /\(literal \(param "RUNTIME_READABLE_FILE_0"\)\)[\s\S]*\(require-not \(literal "\/outside\/credentials"\)\)/,
-    );
-    assert.doesNotMatch(result.policy, /file-write[^\n]*RUNTIME_READABLE_FILE/);
-    assert.doesNotMatch(result.policy, /subpath \(param "RUNTIME_READABLE_FILE/);
-    assert.match(
-      result.policy,
-      /\(subpath \(param "EXECUTABLE_ROOT_0"\)\)[\s\S]*\(require-not \(literal "\/outside\/credentials"\)\)/,
-    );
+    try {
+      const result = buildSeatbeltPolicy({
+        profile,
+        pathContext: { workspaceRoots: ['/repo'], executableRoots: [toolchain] },
+      });
+      assert.ok(result.definitionArgs.includes(`-DEXECUTABLE_ROOT_0=${realpathSync(toolchain)}`));
+      const executableSection = result.policy.slice(
+        result.policy.indexOf('(allow file-read* file-test-existence file-map-executable'),
+      );
+      assert.match(executableSection, /\(subpath \(param "EXECUTABLE_ROOT_0"\)\)/);
+      assert.ok(executableSection.includes(`(require-not (literal "${realpathSync(toolchain)}"))`));
+      assert.ok(
+        executableSection.includes(`(require-not (regex #"^${realpathSync(scratch)}(/.*)?$"))`),
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });
 

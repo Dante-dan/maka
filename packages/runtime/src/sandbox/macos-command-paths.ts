@@ -22,13 +22,13 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
+import { isReadOnlyPermissionProfile, type PermissionProfile } from '@maka/core/permission-profile';
+
 const XCODE_SELECT_TIMEOUT_MS = 1_000;
-const GIT_CONFIG_TIMEOUT_MS = 1_000;
 const CODESIGN_TIMEOUT_MS = 1_000;
 
 export interface MacosCommandPaths {
   executableRoots: readonly string[];
-  runtimeReadableFiles: readonly string[];
 }
 
 export interface MacosDeveloperPathOptions {
@@ -75,66 +75,22 @@ export function resolveMacosDeveloperExecutableRoots(
   return [libraryRoot, realpathSync(sharedFrameworks)];
 }
 
-/**
- * Ask Git which global config/include files are active, then admit only those
- * exact files plus the active global excludes file. Git remains the source of
- * truth for includeIf and path expansion semantics.
- */
-export function resolveMacosGitReadableFiles(
-  env: Readonly<Record<string, string | undefined>>,
-  cwd: string,
-): readonly string[] {
-  const result = spawnSync(
-    '/usr/bin/git',
-    ['config', '--global', '--includes', '--show-origin', '--null', '--list'],
-    {
-      cwd,
-      env: { ...env },
-      encoding: 'utf8',
-      timeout: GIT_CONFIG_TIMEOUT_MS,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    },
-  );
-  if (result.status !== 0 || typeof result.stdout !== 'string') return [];
-
-  const files = parseGitConfigOrigins(result.stdout);
-  const excludes = spawnSync(
-    '/usr/bin/git',
-    [
-      'config',
-      '--global',
-      '--includes',
-      '--show-origin',
-      '--null',
-      '--path',
-      '--get-regexp',
-      '^core\\.excludesfile$',
-    ],
-    {
-      cwd,
-      env: { ...env },
-      encoding: 'utf8',
-      timeout: GIT_CONFIG_TIMEOUT_MS,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    },
-  );
-  if ((excludes.status === 0 || excludes.status === 1) && typeof excludes.stdout === 'string') {
-    files.push(...parseGitConfigValues(excludes.stdout));
-  }
-
-  return canonicalRegularFiles(files);
-}
-
 export function resolveMacosCommandPaths(
+  profile: PermissionProfile,
   env: Readonly<Record<string, string | undefined>>,
-  cwd: string,
+  options: Omit<MacosDeveloperPathOptions, 'developerDir' | 'homeDir'> = {},
 ): MacosCommandPaths {
+  // Runtime roots are an implementation allowance for writable command
+  // sessions. They must not silently widen a restricted read-only profile.
+  if (profile.type === 'managed' && isReadOnlyPermissionProfile(profile)) {
+    return { executableRoots: [] };
+  }
   return {
     executableRoots: resolveMacosDeveloperExecutableRoots({
       developerDir: env.DEVELOPER_DIR,
       homeDir: env.HOME,
+      ...options,
     }),
-    runtimeReadableFiles: resolveMacosGitReadableFiles(env, cwd),
   };
 }
 
@@ -153,40 +109,6 @@ function validateAppleBinary(path: string): boolean {
     stdio: 'ignore',
   });
   return result.status === 0;
-}
-
-function parseGitConfigOrigins(output: string): string[] {
-  const fields = output.split('\0');
-  const files: string[] = [];
-  for (let index = 0; index + 1 < fields.length; index += 2) {
-    const origin = fields[index];
-    if (origin?.startsWith('file:')) files.push(origin.slice('file:'.length));
-  }
-  return files;
-}
-
-function parseGitConfigValues(output: string): string[] {
-  const fields = output.split('\0');
-  const values: string[] = [];
-  for (let index = 1; index < fields.length; index += 2) {
-    const separator = fields[index]?.indexOf('\n') ?? -1;
-    if (separator >= 0) values.push(fields[index].slice(separator + 1));
-  }
-  return values;
-}
-
-function canonicalRegularFiles(paths: readonly string[]): readonly string[] {
-  const result = new Set<string>();
-  for (const path of paths) {
-    if (!path || !isAbsolute(path)) continue;
-    try {
-      const canonical = realpathSync(path);
-      if (statSync(canonical).isFile()) result.add(canonical);
-    } catch {
-      // Missing or inaccessible config references must not widen the sandbox.
-    }
-  }
-  return [...result];
 }
 
 function canonicalDirectory(path: string): string | undefined {
