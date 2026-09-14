@@ -419,9 +419,13 @@ test('application broadcasts reach registered auxiliaries once and stop after re
     onRendererProcessGone: () => undefined,
   });
   const messages: string[] = [];
-  const renderer = Object.assign(new EventEmitter(), {
+  const mainFrame = {
     isDestroyed: () => false,
     send: (channel: string) => { messages.push(channel); },
+  } as unknown as Electron.WebFrameMain;
+  const renderer = Object.assign(new EventEmitter(), {
+    isDestroyed: () => false,
+    mainFrame,
   }) as unknown as Electron.WebContents;
   const release = controller.registerAuxiliaryRenderer(renderer);
   assert.equal(controller.ownsRenderer(renderer), true);
