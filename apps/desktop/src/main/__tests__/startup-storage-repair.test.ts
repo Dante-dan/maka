@@ -32,8 +32,6 @@ import { resolveStorageRoot, STORAGE_ROOT_MARKER_FILE } from '@maka/storage/root
 import type { BrowserMessageBoxAppearance } from '../browser-message-box.js';
 import { showMessageBoxWithDiagnostics } from '../native-diagnostic-dialog.js';
 import { getNativeDiagnosticDialogCopy } from '../native-diagnostic-dialog-copy.js';
-import { runtimeHostStartupTaskPlan } from '../runtime-host-startup-tasks.js';
-import { createStartupTaskRegistry } from '../startup-task-registry.js';
 import { resolveDesktopStorageRoot } from '../storage-root-startup.js';
 import { startupStep } from '../startup-step.js';
 import { resolveWindowRevealMode } from '../window-reveal.js';
@@ -46,10 +44,9 @@ async function compile(name: string, asynchronous = false): Promise<string> {
     const imports = parse(source, { sourceType: 'module', plugins: ['typescript'] }).program.body
       .filter((node) => node.type === 'ImportDeclaration');
     const end = imports.at(-1)?.end ?? 0;
-    // The wrapped body keeps the module's own `export` keywords (early-window
-    // exports its products) — they are illegal inside the function wrapper and
-    // the sandbox reaches the bindings through the deps object anyway.
-    const body = source.slice(end).replace(/\bexport\s+(?=(?:async\s+)?(?:function|const|let|var|class)\b)/gu, '');
+    const body = source
+      .slice(end)
+      .replace('export const runtimeHostPostStartupTasks', 'const runtimeHostPostStartupTasks');
     source = `${source.slice(0, end)}\nexport default async function() {\n${body}\n}`;
   }
   return (await transform(source, {
@@ -57,7 +54,7 @@ async function compile(name: string, asynchronous = false): Promise<string> {
   })).code;
 }
 
-const boot = await compile('early-window', true);
+const boot = await compile('runtime-host-legacy-boot', true);
 const context = await compile('startup-context');
 
 for (const accept of [false, true]) {
@@ -102,8 +99,6 @@ for (const accept of [false, true]) {
         registerClientPluginIpc: () => undefined,
         resolveSystemUiLocale,
         resolveShellEnv: async () => {},
-        createStartupTaskRegistry,
-        runtimeHostStartupTaskPlan,
         resolveBuildInfo: () => ({ mode: 'packaged' }),
         configureDesktopRuntimeHostPeerClient: async () => undefined,
         loadOrCreateRuntimeHostClientInstanceId: async () => 'test',
@@ -112,6 +107,8 @@ for (const accept of [false, true]) {
         createClientRuntimeHostProfileCatalog: () => ({}),
         resolveDesktopRuntimeHostStartup: async () => ({}),
         resolveE2eFixture: () => undefined,
+        desktopStartupProgressWindow: () => undefined,
+        updateDesktopStartupProgress: () => {},
         resolveDesktopStorageRoot,
         startupStep,
         getNativeDiagnosticDialogCopy,
