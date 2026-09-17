@@ -104,7 +104,7 @@ function readSelectedDeveloperDirectory(): string | undefined {
 }
 
 function validateAppleBinary(path: string): boolean {
-  const result = spawnSync('/usr/bin/codesign', ['--verify', '--strict', path], {
+  const result = spawnSync('/usr/bin/codesign', ['--verify', '--strict', '-R=anchor apple', path], {
     timeout: CODESIGN_TIMEOUT_MS,
     stdio: 'ignore',
   });

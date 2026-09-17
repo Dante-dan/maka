@@ -822,7 +822,11 @@ function sandboxCommand(
   // path is canonicalized and code-sign validated, but is not fd-pinned;
   // replacement after this point remains a documented residual limitation.
   const macosPaths =
-    platform === 'darwin' ? resolveMacosCommandPaths(effective.profile, env) : undefined;
+    platform === 'darwin'
+      ? manager.shouldSandbox(effective.profile)
+        ? resolveMacosCommandPaths(effective.profile, env)
+        : { executableRoots: [] }
+      : undefined;
 
   let result: ReturnType<SandboxManager['transform']>;
   try {

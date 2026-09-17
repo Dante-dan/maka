@@ -18,6 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import {
   mkdirSync,
@@ -147,13 +148,42 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
-  it('rejects a structurally plausible toolchain whose libxcrun is not Apple-signed', () => {
+  it('rejects a structurally plausible toolchain containing a non-Mach-O libxcrun', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-unsigned-clt-'));
     const developer = join(scratch, 'CommandLineTools');
     const library = join(developer, 'usr', 'lib');
     mkdirSync(library, { recursive: true });
     writeFileSync(join(library, 'libxcrun.dylib'), 'not signed');
     try {
+      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ developerDir: developer }), []);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Apple signer validation', { skip: process.platform !== 'darwin' }, () => {
+  it('rejects a valid ad-hoc-signed dylib in a plausible toolchain', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-adhoc-clt-'));
+    const developer = join(scratch, 'CommandLineTools');
+    const library = join(developer, 'usr', 'lib');
+    const binary = join(library, 'libxcrun.dylib');
+    mkdirSync(library, { recursive: true });
+    try {
+      const source = join(scratch, 'fixture.c');
+      writeFileSync(source, 'int fixture(void) { return 0; }\n');
+      const compile = spawnSync('/usr/bin/clang', ['-dynamiclib', source, '-o', binary], {
+        encoding: 'utf8',
+      });
+      assert.equal(compile.status, 0, compile.stderr);
+      const sign = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', binary], {
+        encoding: 'utf8',
+      });
+      assert.equal(sign.status, 0, sign.stderr);
+      const verify = spawnSync('/usr/bin/codesign', ['--verify', '--strict', binary], {
+        encoding: 'utf8',
+      });
+      assert.equal(verify.status, 0, verify.stderr);
       assert.deepEqual(resolveMacosDeveloperExecutableRoots({ developerDir: developer }), []);
     } finally {
       rmSync(scratch, { recursive: true, force: true });

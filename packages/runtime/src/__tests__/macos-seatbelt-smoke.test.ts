@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { after, describe, it } from 'node:test';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
@@ -41,7 +41,7 @@ const selectedDeveloperDirectory =
   process.platform === 'darwin'
     ? spawnSync('/usr/bin/xcode-select', ['-p'], { encoding: 'utf8' }).stdout.trim()
     : '';
-const canRunAppleClt = selectedDeveloperDirectory.endsWith('/CommandLineTools');
+const canRunAppleToolchain = selectedDeveloperDirectory.length > 0;
 
 async function makeWorkspace(): Promise<string> {
   return realpath(await mkdtemp(join(tmpdir(), 'maka-seatbelt-workspace-')));
@@ -157,8 +157,8 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
     assert.equal(child.status, 0, child.stderr);
   });
 
-  it('starts Apple Git with the selected CLT without host-side Git config discovery', {
-    skip: !canRunAppleClt,
+  it('starts Apple Git with the selected Apple toolchain without host-side Git config discovery', {
+    skip: !canRunAppleToolchain,
   }, async () => {
     const workspaceRoot = await makeWorkspace();
     const emptyHome = await realpath(await mkdtemp(join(tmpdir(), 'maka-git-home-')));
@@ -167,6 +167,7 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
     const gitEnvironment = {
       ...process.env,
       HOME: emptyHome,
+      DEVELOPER_DIR: selectedDeveloperDirectory,
     };
     const setup = spawnSync('/usr/bin/git', ['init'], {
       cwd: workspaceRoot,
@@ -179,9 +180,14 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
       createWorkspaceWritePermissionProfile(),
       gitEnvironment,
     );
-    assert.deepEqual(runtimePaths.executableRoots, [
-      join(selectedDeveloperDirectory, 'usr', 'lib'),
-    ]);
+    const canonicalDeveloperDirectory = await realpath(selectedDeveloperDirectory);
+    const expectedRoots = [await realpath(join(canonicalDeveloperDirectory, 'usr', 'lib'))];
+    if (basename(canonicalDeveloperDirectory) !== 'CommandLineTools') {
+      expectedRoots.push(
+        await realpath(join(dirname(canonicalDeveloperDirectory), 'SharedFrameworks')),
+      );
+    }
+    assert.deepEqual(runtimePaths.executableRoots, expectedRoots);
 
     const child = runSeatbeltCommand(
       workspaceRoot,
