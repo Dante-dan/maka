@@ -40,6 +40,7 @@ import {
 import {
   resolveMacosCommandPaths,
   resolveMacosDeveloperExecutableRoots,
+  type MacosDeveloperCommandRunner,
 } from '../sandbox/macos-command-paths.js';
 
 describe('resolveMacosDeveloperExecutableRoots', () => {
@@ -122,6 +123,51 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
       },
     });
     assert.equal(selected, false);
+  });
+
+  it('bounds both discovery subprocesses to one second and fails closed on timeout', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-bounded-toolchain-'));
+    const developer = join(scratch, 'CommandLineTools');
+    const library = join(developer, 'usr', 'lib');
+    mkdirSync(library, { recursive: true });
+    writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
+    const calls: Array<{ executable: string; args: readonly string[]; timeout: number }> = [];
+    const runCommand: MacosDeveloperCommandRunner = (executable, args, options) => {
+      calls.push({ executable, args, timeout: options.timeout });
+      if (executable === '/usr/bin/xcode-select') {
+        return { status: 0, stdout: `${developer}\n` };
+      }
+      return { status: null };
+    };
+    try {
+      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ runCommand }), []);
+      assert.deepEqual(calls, [
+        { executable: '/usr/bin/xcode-select', args: ['-p'], timeout: 1_000 },
+        {
+          executable: '/usr/bin/codesign',
+          args: [
+            '--verify',
+            '--strict',
+            '-R=anchor apple',
+            realpathSync(join(library, 'libxcrun.dylib')),
+          ],
+          timeout: 1_000,
+        },
+      ]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when developer-directory discovery times out', () => {
+    const calls: string[] = [];
+    const runCommand: MacosDeveloperCommandRunner = (executable) => {
+      calls.push(executable);
+      return { status: null };
+    };
+
+    assert.deepEqual(resolveMacosDeveloperExecutableRoots({ runCommand }), []);
+    assert.deepEqual(calls, ['/usr/bin/xcode-select']);
   });
 
   it('returns a canonical root that is unaffected by later selector alias replacement', () => {

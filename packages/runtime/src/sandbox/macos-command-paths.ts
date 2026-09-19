@@ -27,6 +27,21 @@ import { isReadOnlyPermissionProfile, type PermissionProfile } from '@maka/core/
 const XCODE_SELECT_TIMEOUT_MS = 1_000;
 const CODESIGN_TIMEOUT_MS = 1_000;
 
+interface MacosDeveloperCommandResult {
+  status: number | null;
+  stdout?: string;
+}
+
+export type MacosDeveloperCommandRunner = (
+  executable: string,
+  args: readonly string[],
+  options: {
+    encoding?: 'utf8';
+    timeout: number;
+    stdio: ['ignore', 'pipe', 'ignore'] | 'ignore';
+  },
+) => MacosDeveloperCommandResult;
+
 export interface MacosCommandPaths {
   executableRoots: readonly string[];
 }
@@ -36,15 +51,17 @@ export interface MacosDeveloperPathOptions {
   homeDir?: string;
   selectDeveloperDir?: () => string | undefined;
   validateAppleBinary?: (path: string) => boolean;
+  runCommand?: MacosDeveloperCommandRunner;
 }
 
 /** Resolve only the dynamic-library directories used by the selected Apple toolchain. */
 export function resolveMacosDeveloperExecutableRoots(
   options: MacosDeveloperPathOptions = {},
 ): readonly string[] {
+  const runCommand = options.runCommand ?? runDeveloperCommand;
   const selected =
     options.developerDir?.trim() ||
-    (options.selectDeveloperDir ?? readSelectedDeveloperDirectory)();
+    (options.selectDeveloperDir ?? (() => readSelectedDeveloperDirectory(runCommand)))();
   if (!selected || !isAbsolute(selected)) return [];
 
   let developerRoot: string;
@@ -61,7 +78,13 @@ export function resolveMacosDeveloperExecutableRoots(
   if (!libraryRoot) return [];
   const xcrunLibrary = canonicalRegularFile(join(libraryRoot, 'libxcrun.dylib'));
   if (!xcrunLibrary || !isPathWithin(xcrunLibrary, libraryRoot)) return [];
-  if (!(options.validateAppleBinary ?? validateAppleBinary)(xcrunLibrary)) return [];
+  if (
+    !(options.validateAppleBinary ?? ((path) => validateAppleBinary(path, runCommand)))(
+      xcrunLibrary,
+    )
+  ) {
+    return [];
+  }
 
   if (basename(developerRoot) === 'CommandLineTools') return [libraryRoot];
 
@@ -94,22 +117,36 @@ export function resolveMacosCommandPaths(
   };
 }
 
-function readSelectedDeveloperDirectory(): string | undefined {
-  const result = spawnSync('/usr/bin/xcode-select', ['-p'], {
+function readSelectedDeveloperDirectory(
+  runCommand: MacosDeveloperCommandRunner,
+): string | undefined {
+  const result = runCommand('/usr/bin/xcode-select', ['-p'], {
     encoding: 'utf8',
     timeout: XCODE_SELECT_TIMEOUT_MS,
     stdio: ['ignore', 'pipe', 'ignore'],
   });
-  return result.status === 0 ? result.stdout.trim() || undefined : undefined;
+  return result.status === 0 ? result.stdout?.trim() || undefined : undefined;
 }
 
-function validateAppleBinary(path: string): boolean {
-  const result = spawnSync('/usr/bin/codesign', ['--verify', '--strict', '-R=anchor apple', path], {
-    timeout: CODESIGN_TIMEOUT_MS,
-    stdio: 'ignore',
-  });
+function validateAppleBinary(path: string, runCommand: MacosDeveloperCommandRunner): boolean {
+  const result = runCommand(
+    '/usr/bin/codesign',
+    ['--verify', '--strict', '-R=anchor apple', path],
+    {
+      timeout: CODESIGN_TIMEOUT_MS,
+      stdio: 'ignore',
+    },
+  );
   return result.status === 0;
 }
+
+const runDeveloperCommand: MacosDeveloperCommandRunner = (executable, args, options) => {
+  const result = spawnSync(executable, [...args], options);
+  return {
+    status: result.status,
+    ...(typeof result.stdout === 'string' ? { stdout: result.stdout } : {}),
+  };
+};
 
 function canonicalDirectory(path: string): string | undefined {
   try {
