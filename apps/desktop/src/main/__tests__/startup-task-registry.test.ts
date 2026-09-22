@@ -34,6 +34,7 @@ test('production plan preserves the three independent startup gates', () => {
       .map(({ name }) => name),
     [
       'start-desktop-background-services',
+      'resolve-shell-env',
       'start-mcp',
       'resume-mcp-logins',
       'refresh-client-settings',
@@ -55,6 +56,85 @@ test('production plan preserves the three independent startup gates', () => {
       'offer-unavailable-default-runtime-host',
     ],
   );
+});
+
+test('every production task that can spawn depends on shell environment resolution', () => {
+  const byName = new Map(
+    runtimeHostStartupTaskPlan.map((definition) => [definition.name, definition]),
+  );
+  const dependsOnShellEnvironment = (name: string, visited = new Set<string>()): boolean => {
+    if (name === 'resolve-shell-env') return true;
+    if (visited.has(name)) return false;
+    visited.add(name);
+    const definition = byName.get(name as (typeof runtimeHostStartupTaskPlan)[number]['name']);
+    return definition?.dependencies.some((dependency) =>
+      dependsOnShellEnvironment(dependency, visited),
+    ) ?? false;
+  };
+
+  const spawnCapableTasks = runtimeHostStartupTaskPlan.filter(
+    ({ spawnPolicy }) => spawnPolicy === 'requires-shell-environment',
+  );
+  assert.deepEqual(
+    spawnCapableTasks.map(({ name }) => name),
+    [
+      'start-mcp',
+      'resume-mcp-logins',
+      'start-enabled-runtime-host-profiles',
+      'recover-local-runtime-host-access',
+    ],
+  );
+  assert.deepEqual(
+    spawnCapableTasks.filter(({ name }) => !dependsOnShellEnvironment(name)),
+    [],
+  );
+});
+
+test('production spawn-capable tasks cannot start before shell environment resolution', async () => {
+  const events: string[] = [];
+  let finishShell!: () => void;
+  let markShellStarted!: () => void;
+  const shellStarted = new Promise<void>((resolve) => {
+    markShellStarted = resolve;
+  });
+  const shellReady = new Promise<void>((resolve) => {
+    finishShell = resolve;
+  });
+  const registry = createStartupTaskRegistry(runtimeHostStartupTaskPlan, {
+    'start-desktop-background-services': () => events.push('background-services'),
+    'resolve-shell-env': async () => {
+      events.push('shell-env:start');
+      markShellStarted();
+      await shellReady;
+      events.push('shell-env:done');
+    },
+    'start-mcp': () => events.push('mcp'),
+    'resume-mcp-logins': () => events.push('mcp-logins'),
+    'refresh-client-settings': () => events.push('client-settings'),
+    'start-enabled-runtime-host-profiles': () => events.push('runtime-host-profiles'),
+    'restore-guest-session-mounts': () => events.push('guest-session-mounts'),
+    'recover-local-runtime-host-access': () => events.push('local-runtime-host-recovery'),
+    'offer-unavailable-default-runtime-host': () => events.push('default-runtime-host-offer'),
+  });
+
+  const immediate = registry.runPhase(runtimeHostStartupTaskPhases.immediate);
+  await shellStarted;
+  assert.deepEqual(events, ['background-services', 'shell-env:start']);
+
+  finishShell();
+  await immediate;
+  await registry.runPhase(runtimeHostStartupTaskPhases.shellEnvReady);
+  await registry.runPhase(runtimeHostStartupTaskPhases.runtimeHostReady);
+
+  const shellReadyIndex = events.indexOf('shell-env:done');
+  for (const task of [
+    'mcp',
+    'mcp-logins',
+    'runtime-host-profiles',
+    'local-runtime-host-recovery',
+  ]) {
+    assert.ok(events.indexOf(task) > shellReadyIndex, `${task} started before shell environment`);
+  }
 });
 
 test('uses definition order as the deterministic tiebreak for dependency peers', async () => {

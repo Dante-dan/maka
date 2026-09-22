@@ -1343,6 +1343,7 @@ const registerDesktopWorkBoard = (): void => {
   }
 };
 const startupTasks = createRuntimeHostStartupTaskRegistry({
+  'resolve-shell-env': () => shellEnvReady,
   'restore-guest-session-mounts': () =>
     guestSessionMountService.start().catch((error: unknown) => {
       console.error('[runtime-host] shared Sessions could not be restored:', error);
@@ -1413,12 +1414,11 @@ const startupTasks = createRuntimeHostStartupTaskRegistry({
 
 // Keep the three historical launch gates explicit: Local Host handoff may wait
 // for a user decision, but it must not hold independent background work.
-void startupTasks
-  .runPhase(runtimeHostStartupTaskPhases.immediate)
-  .catch((error: unknown) =>
+const immediateStartup = startupTasks.runPhase(runtimeHostStartupTaskPhases.immediate);
+void immediateStartup.catch((error: unknown) =>
     console.error('[runtime-host] immediate startup task failed:', error),
   );
-void shellEnvReady
+void immediateStartup
   .then(() => startupTasks.runPhase(runtimeHostStartupTaskPhases.shellEnvReady))
   .catch((error: unknown) =>
     console.error('[runtime-host] shell environment startup task failed:', error),
@@ -1426,6 +1426,7 @@ void shellEnvReady
 
 void (async () => {
   await shellEnvReady;
+  await immediateStartup;
   await runtimeHostManager?.start();
   registerDesktopWorkBoard();
   await startupTasks.runPhase(runtimeHostStartupTaskPhases.runtimeHostReady);

@@ -22,53 +22,76 @@ import {
   type StartupTaskDefinition,
 } from './startup-task-registry.js';
 
+type RuntimeHostStartupSpawnPolicy =
+  | 'does-not-spawn'
+  | 'requires-shell-environment'
+  | 'resolves-shell-environment';
+
+type RuntimeHostStartupTaskDefinition = StartupTaskDefinition & {
+  spawnPolicy: RuntimeHostStartupSpawnPolicy;
+};
+
 export const runtimeHostStartupTaskPlan = [
   {
     name: 'start-desktop-background-services',
     phase: 'module-eval-immediate',
     dependencies: [],
+    spawnPolicy: 'does-not-spawn',
+  },
+  {
+    name: 'resolve-shell-env',
+    phase: 'module-eval-immediate',
+    dependencies: [],
+    spawnPolicy: 'resolves-shell-environment',
   },
   {
     name: 'start-mcp',
     phase: 'module-eval-immediate',
-    dependencies: [],
+    dependencies: ['resolve-shell-env'],
     execution: 'detached',
+    spawnPolicy: 'requires-shell-environment',
   },
   {
     name: 'resume-mcp-logins',
     phase: 'module-eval-immediate',
-    dependencies: [],
+    dependencies: ['resolve-shell-env'],
     execution: 'detached',
+    spawnPolicy: 'requires-shell-environment',
   },
   {
     name: 'refresh-client-settings',
     phase: 'module-eval-immediate',
     dependencies: [],
     execution: 'detached',
+    spawnPolicy: 'does-not-spawn',
   },
   {
     name: 'start-enabled-runtime-host-profiles',
     phase: 'shell-env-ready',
-    dependencies: [],
+    dependencies: ['resolve-shell-env'],
     execution: 'detached',
+    spawnPolicy: 'requires-shell-environment',
   },
   {
     name: 'restore-guest-session-mounts',
     phase: 'runtime-host-ready',
     dependencies: [],
+    spawnPolicy: 'does-not-spawn',
   },
   {
     name: 'recover-local-runtime-host-access',
     phase: 'runtime-host-ready',
-    dependencies: ['restore-guest-session-mounts'],
+    dependencies: ['resolve-shell-env', 'restore-guest-session-mounts'],
+    spawnPolicy: 'requires-shell-environment',
   },
   {
     name: 'offer-unavailable-default-runtime-host',
     phase: 'runtime-host-ready',
     dependencies: ['recover-local-runtime-host-access'],
     execution: 'detached',
+    spawnPolicy: 'does-not-spawn',
   },
-] as const satisfies readonly StartupTaskDefinition[];
+] as const satisfies readonly RuntimeHostStartupTaskDefinition[];
 
 export const runtimeHostStartupTaskPhases = {
   immediate: 'module-eval-immediate',

@@ -126,6 +126,9 @@ test('preserves the three startup task gates', () => {
   const shellEnvRun = bootSource.indexOf(
     'runPhase(runtimeHostStartupTaskPhases.shellEnvReady)',
   );
+  const shellEnvImplementation = bootSource.indexOf(
+    "'resolve-shell-env': () => shellEnvReady",
+  );
   const runtimeHostRun = bootSource.indexOf(
     'runPhase(runtimeHostStartupTaskPhases.runtimeHostReady)',
     hostStart,
@@ -133,6 +136,7 @@ test('preserves the three startup task gates', () => {
 
   assert.ok(registryImport >= 0);
   assert.ok(registryCreate > registryImport);
+  assert.ok(shellEnvImplementation > registryCreate);
   assert.ok(hostStart >= 0);
   assert.ok(immediateRun >= registryCreate && immediateRun < hostStart);
   assert.ok(shellEnvRun >= registryCreate && shellEnvRun < hostStart);
