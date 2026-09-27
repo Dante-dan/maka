@@ -801,7 +801,7 @@ export function userFacingText(message: Pick<UserMessage, 'text' | 'displayText'
 
 /**
  * Closed policy for system notes that are part of the user-visible transcript:
- * exactly the notes the runtime writes.
+ * runtime notes plus the reader's explicit omitted-transcript placeholder.
  */
 export function isUserVisibleSessionSystemNote(kind: string): boolean {
   return isRuntimeSystemNoteKind(kind);
@@ -1256,6 +1256,7 @@ export const RUNTIME_SYSTEM_NOTE_KINDS = [
   'context_reported_window_exceeded',
   'context_overflow_after_compaction',
   'step_limit',
+  'transcript_omitted',
 ] as const;
 
 /**

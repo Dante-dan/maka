@@ -752,6 +752,7 @@ export async function createDesktopRuntimeHostCandidate(
       sendToRenderer(`sessions:event:${sessionId}`, { type: 'host_observation_pending' });
     }
     observationsAttached = true;
+    const transcriptSeedFailures = new Set<string>();
     const restoredSessionIds = await sessionObservations.attach(
       sessionObserver,
       (target) => ({
@@ -766,13 +767,20 @@ export async function createDesktopRuntimeHostCandidate(
         off: target.off.bind(target),
       }),
       (missingSessionId) => emitSessionsChanged("deleted", missingSessionId),
+      (failedSessionId) => {
+        transcriptSeedFailures.add(failedSessionId);
+        sendToRenderer(`sessions:event:${failedSessionId}`, {
+          type: 'host_observation_error',
+          message: 'Session transcript is unavailable',
+        });
+      },
     );
     const restoredSessionIdSet = new Set(restoredSessionIds);
     // Attach forgets Sessions the Host no longer serves, so only Sessions
     // that are still registered but failed to restore count as failures.
     const failedSessionIds = sessionObservations
       .observedSessionIds()
-      .filter((sessionId) => !restoredSessionIdSet.has(sessionId));
+      .filter((sessionId) => !restoredSessionIdSet.has(sessionId) && !transcriptSeedFailures.has(sessionId));
     if (failedSessionIds.length > 0) {
       throw new Error(
         `Failed to restore Session observations: ${failedSessionIds.join(', ')}`,

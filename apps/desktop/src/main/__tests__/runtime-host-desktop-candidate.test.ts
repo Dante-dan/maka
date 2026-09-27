@@ -1091,6 +1091,50 @@ test('retries candidate startup when a restored observation cannot seed', async 
   await observations.close();
 });
 
+test('keeps replacement Host ready when one transcript observation cannot seed', async () => {
+  const observations = new RuntimeHostSessionObservationRegistry();
+  const firstIpc = ipcHarness();
+  const firstHost = connectionHarness('transcript-source', {
+    sessionId: 'session-1',
+  });
+  const firstCandidate = await createDesktopRuntimeHostCandidate(
+    firstHost.connection,
+    deps(firstIpc),
+    observations,
+  );
+  await firstIpc.invoke('sessions:observe', 'session-1', 'observer-1');
+  await firstCandidate.close();
+
+  const events: Array<{ channel: string; payload: unknown }> = [];
+  const failingHost = connectionHarness('transcript-seed-failure', {
+    sessionId: 'session-1',
+    subscriptionError: new RuntimeHostOperationError(
+      'subscription.open',
+      'persistence_failed',
+      'Session transcript is unavailable',
+    ),
+    subscriptionErrorSessionId: 'session-1',
+  });
+  const candidate = await createDesktopRuntimeHostCandidate(
+    failingHost.connection,
+    {
+      ...deps(ipcHarness()),
+      renderer: {
+        send(channel, _host, payload) {
+          events.push({ channel, payload });
+        },
+      },
+    },
+    observations,
+  );
+  assert.deepEqual(observations.observedSessionIds(), ['session-1']);
+  await waitFor(() => events.some(({ channel, payload }) =>
+    channel === 'sessions:event:session-1' &&
+    (payload as { type?: string }).type === 'host_observation_error'));
+  await candidate.close();
+  await observations.close();
+});
+
 test('drops a stale shared Session observation when Guest access is gone', async () => {
   const observations = new RuntimeHostSessionObservationRegistry();
   const firstIpc = ipcHarness();
@@ -1323,6 +1367,7 @@ function connectionHarness(
     subscriptionSnapshot?: SessionContinuitySnapshot;
     activeAssistantStreams?: readonly SessionAssistantStreamIdentity[];
     subscriptionError?: Error;
+    subscriptionErrorSessionId?: string;
     runtimeResourcePty?: ReturnType<typeof ptySnapshot>;
     runtimeResourceUpdate?: ShellRunUpdate;
     sharedSessionAvailable?: boolean;
@@ -1464,7 +1509,9 @@ function connectionHarness(
       throw new Error(`Unexpected operation: ${operation}`);
     },
     openSessionSubscription: async ({ sessionId }: { sessionId: string }) => {
-      if (options.subscriptionError) throw options.subscriptionError;
+      if (options.subscriptionError &&
+        (!options.subscriptionErrorSessionId || options.subscriptionErrorSessionId === sessionId))
+        throw options.subscriptionError;
       const subscriptionFrames = new AsyncFrameQueue();
       activeSubscriptionFrames = subscriptionFrames;
       // The Host holds a subscription's frames until the subscriber calls
