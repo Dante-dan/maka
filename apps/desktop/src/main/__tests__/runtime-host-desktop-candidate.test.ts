@@ -1103,6 +1103,7 @@ test('keeps replacement Host ready when one transcript observation cannot seed',
     observations,
   );
   await firstIpc.invoke('sessions:observe', 'session-1', 'observer-1');
+  await firstIpc.invoke('sessions:observe', 'session-2', 'observer-2');
   await firstCandidate.close();
 
   const events: Array<{ channel: string; payload: unknown }> = [];
@@ -1114,6 +1115,17 @@ test('keeps replacement Host ready when one transcript observation cannot seed',
       'Session transcript is unavailable',
     ),
     subscriptionErrorSessionId: 'session-1',
+    subscriptionSnapshots: {
+      'session-2': continuitySnapshot({
+        session: { ...continuitySnapshot().session, sessionId: 'session-2' },
+        rootTurn: {
+          sessionId: 'session-2',
+          turnId: 'turn-2',
+          runId: 'run-2',
+          status: 'running',
+        },
+      }),
+    },
   });
   const candidate = await createDesktopRuntimeHostCandidate(
     failingHost.connection,
@@ -1127,9 +1139,15 @@ test('keeps replacement Host ready when one transcript observation cannot seed',
     },
     observations,
   );
-  assert.deepEqual(observations.observedSessionIds(), ['session-1']);
+  assert.deepEqual(observations.observedSessionIds(), ['session-1', 'session-2']);
   await waitFor(() => events.some(({ channel, payload }) =>
     channel === 'sessions:event:session-1' &&
+    (payload as { type?: string }).type === 'host_observation_error'));
+  assert.ok(events.some(({ channel, payload }) =>
+    channel === 'sessions:active-interactions-changed' &&
+    (payload as { sessionId?: string }).sessionId === 'session-2'));
+  assert.ok(!events.some(({ channel, payload }) =>
+    channel === 'sessions:event:session-2' &&
     (payload as { type?: string }).type === 'host_observation_error'));
   await candidate.close();
   await observations.close();
@@ -1365,6 +1383,7 @@ function connectionHarness(
     sessionId?: string;
     revisionAbandon?: 'abandoned' | 'retained';
     subscriptionSnapshot?: SessionContinuitySnapshot;
+    subscriptionSnapshots?: Record<string, SessionContinuitySnapshot>;
     activeAssistantStreams?: readonly SessionAssistantStreamIdentity[];
     subscriptionError?: Error;
     subscriptionErrorSessionId?: string;
@@ -1544,7 +1563,7 @@ function connectionHarness(
           ptyListeners.add(listener);
           return () => ptyListeners.delete(listener);
         },
-        snapshot: options.subscriptionSnapshot ?? {
+        snapshot: options.subscriptionSnapshots?.[sessionId] ?? options.subscriptionSnapshot ?? {
           projectionRevision: 1,
           session: { sessionId },
         },
