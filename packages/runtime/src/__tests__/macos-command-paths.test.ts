@@ -94,6 +94,48 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
+  it('rejects a SharedFrameworks symlink outside the Xcode bundle', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-xcode-frameworks-escape-'));
+    const contents = join(scratch, 'Xcode.app', 'Contents');
+    const developer = join(contents, 'Developer');
+    const library = join(developer, 'usr', 'lib');
+    mkdirSync(library, { recursive: true });
+    writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
+    symlinkSync('/', join(contents, 'SharedFrameworks'));
+    try {
+      assert.deepEqual(
+        resolveMacosDeveloperExecutableRoots({
+          developerDir: developer,
+          validateAppleBinary: () => true,
+        }),
+        [],
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a toolchain library symlink outside the selected developer directory', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'maka-clt-library-escape-'));
+    const developer = join(scratch, 'CommandLineTools');
+    const externalLibrary = join(scratch, 'external-lib');
+    mkdirSync(join(developer, 'usr'), { recursive: true });
+    mkdirSync(externalLibrary);
+    writeFileSync(join(externalLibrary, 'libxcrun.dylib'), 'fixture');
+    symlinkSync(externalLibrary, join(developer, 'usr', 'lib'));
+    try {
+      assert.deepEqual(
+        resolveMacosDeveloperExecutableRoots({
+          developerDir: developer,
+          validateAppleBinary: () => true,
+        }),
+        [],
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it('rejects root, home, ordinary directories, and unresolved symlinks', () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-invalid-developer-'));
     const ordinary = join(scratch, 'ordinary');

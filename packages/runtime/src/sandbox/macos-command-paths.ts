@@ -75,7 +75,7 @@ export function resolveMacosDeveloperExecutableRoots(
   if (developerRoot === '/' || (homeRoot && isPathWithin(developerRoot, homeRoot))) return [];
 
   const libraryRoot = canonicalDirectory(join(developerRoot, 'usr', 'lib'));
-  if (!libraryRoot) return [];
+  if (!libraryRoot || !isPathWithin(libraryRoot, developerRoot)) return [];
   const xcrunLibrary = canonicalRegularFile(join(libraryRoot, 'libxcrun.dylib'));
   if (!xcrunLibrary || !isPathWithin(xcrunLibrary, libraryRoot)) return [];
   if (
@@ -93,9 +93,9 @@ export function resolveMacosDeveloperExecutableRoots(
   }
 
   const contentsRoot = dirname(developerRoot);
-  const sharedFrameworks = join(contentsRoot, 'SharedFrameworks');
-  if (!isDirectory(sharedFrameworks)) return [];
-  return [libraryRoot, realpathSync(sharedFrameworks)];
+  const sharedFrameworks = canonicalDirectory(join(contentsRoot, 'SharedFrameworks'));
+  if (!sharedFrameworks || !isPathWithin(sharedFrameworks, contentsRoot)) return [];
+  return [libraryRoot, sharedFrameworks];
 }
 
 export function resolveMacosCommandPaths(
@@ -164,14 +164,6 @@ function canonicalRegularFile(path: string): string | undefined {
     return statSync(canonical).isFile() ? canonical : undefined;
   } catch {
     return undefined;
-  }
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
   }
 }
 
