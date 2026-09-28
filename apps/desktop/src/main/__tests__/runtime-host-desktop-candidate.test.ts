@@ -1111,7 +1111,7 @@ test('keeps replacement Host ready when one transcript observation cannot seed',
     sessionId: 'session-1',
     subscriptionError: new RuntimeHostOperationError(
       'subscription.open',
-      'persistence_failed',
+      'transcript_unavailable',
       'Session transcript is unavailable',
     ),
     subscriptionErrorSessionId: 'session-1',

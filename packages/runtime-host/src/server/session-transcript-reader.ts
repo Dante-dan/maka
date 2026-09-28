@@ -343,6 +343,9 @@ function createDurableLedgerTranscriptReader(input: {
           if (!run) break;
           if (run.invocation.turnId === turnId) {
             for (const { message } of await projectTurn(run)) {
+              if (message.type === 'system_note' && message.kind === 'transcript_omitted') {
+                throw new Error(`Delegated turn ${turnId} has an omitted transcript result`);
+              }
               if (message.type === 'assistant' && message.text.trim()) result = message.text;
             }
           }
@@ -634,10 +637,10 @@ function omittedTranscriptRecord(turn: RuntimeTranscriptRun): {
   message: StoredMessage;
 } {
   return {
-    sequence: turn.firstOrdinal * EVENT_SEQUENCE_STRIDE,
+    sequence: turn.firstEventOrdinal * EVENT_SEQUENCE_STRIDE,
     message: {
       type: 'system_note',
-      id: `transcript-omitted:${turn.invocation.invocationId}:${turn.firstOrdinal}`,
+      id: `transcript-omitted:${turn.invocation.invocationId}:${turn.firstEventOrdinal}`,
       turnId: turn.invocation.turnId,
       ts: turn.invocation.openedAt,
       kind: 'transcript_omitted',

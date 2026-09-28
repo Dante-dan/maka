@@ -1395,6 +1395,8 @@ function systemNoteText(message: SystemNoteMessage): string | undefined {
     }
     case 'step_limit':
       return STEP_LIMIT_NOTICE_TEXT;
+    case 'transcript_omitted':
+      return 'Part of this session transcript was omitted because it exceeded the display limit.';
   }
 }
 

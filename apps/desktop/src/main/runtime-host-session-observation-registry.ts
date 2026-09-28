@@ -103,8 +103,7 @@ function isTranscriptSeedFailure(error: unknown): boolean {
   return (
     error instanceof RuntimeHostOperationError &&
     error.operation === 'subscription.open' &&
-    error.code === 'persistence_failed' &&
-    error.message === 'Session transcript is unavailable'
+    error.code === 'transcript_unavailable'
   );
 }
 
