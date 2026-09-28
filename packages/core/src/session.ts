@@ -824,7 +824,7 @@ export function userFacingText(message: Pick<UserMessage, 'text' | 'displayText'
  * runtime notes plus the reader's explicit omitted-transcript placeholder.
  */
 export function isUserVisibleSessionSystemNote(kind: string): boolean {
-  return isRuntimeSystemNoteKind(kind);
+  return isRuntimeSystemNoteKind(kind) || kind === 'transcript_omitted';
 }
 
 /**
@@ -1276,8 +1276,10 @@ export const RUNTIME_SYSTEM_NOTE_KINDS = [
   'context_reported_window_exceeded',
   'context_overflow_after_compaction',
   'step_limit',
-  'transcript_omitted',
 ] as const;
+
+/** Reader-generated notices are never written back into a RuntimeEvent ledger. */
+export const SYNTHETIC_SYSTEM_NOTE_KINDS = ['transcript_omitted'] as const;
 
 /**
  * Notes nothing writes any more, still decoded so old transcripts and run
@@ -1295,7 +1297,10 @@ export const RETIRED_SYSTEM_NOTE_KINDS = [
 ] as const;
 
 export type RuntimeSystemNoteKind = (typeof RUNTIME_SYSTEM_NOTE_KINDS)[number];
-export type SystemNoteKind = RuntimeSystemNoteKind | (typeof RETIRED_SYSTEM_NOTE_KINDS)[number];
+export type SystemNoteKind =
+  | RuntimeSystemNoteKind
+  | (typeof SYNTHETIC_SYSTEM_NOTE_KINDS)[number]
+  | (typeof RETIRED_SYSTEM_NOTE_KINDS)[number];
 
 export function isRuntimeSystemNoteKind(kind: string): kind is RuntimeSystemNoteKind {
   return (RUNTIME_SYSTEM_NOTE_KINDS as readonly string[]).includes(kind);
@@ -1303,7 +1308,9 @@ export function isRuntimeSystemNoteKind(kind: string): kind is RuntimeSystemNote
 
 export function isSystemNoteKind(kind: string): kind is SystemNoteKind {
   return (
-    isRuntimeSystemNoteKind(kind) || (RETIRED_SYSTEM_NOTE_KINDS as readonly string[]).includes(kind)
+    isRuntimeSystemNoteKind(kind) ||
+    (SYNTHETIC_SYSTEM_NOTE_KINDS as readonly string[]).includes(kind) ||
+    (RETIRED_SYSTEM_NOTE_KINDS as readonly string[]).includes(kind)
   );
 }
 
