@@ -67,6 +67,11 @@ class TranscriptProjectionLimitError extends Error {
   readonly name = 'TranscriptProjectionLimitError';
 }
 
+/** A delegated result cannot be delivered until its transcript is readable. */
+export class OmittedTurnResultError extends Error {
+  readonly name = 'OmittedTurnResultError';
+}
+
 export function createSessionTranscriptReader(input: {
   stores: ExecutionStoresWriter<'interactive'>;
   canonicalPermissionOutcomes: CanonicalPermissionOutcomeReader;
@@ -344,7 +349,9 @@ function createDurableLedgerTranscriptReader(input: {
           if (run.invocation.turnId === turnId) {
             for (const { message } of await projectTurn(run)) {
               if (message.type === 'system_note' && message.kind === 'transcript_omitted') {
-                throw new Error(`Delegated turn ${turnId} has an omitted transcript result`);
+                throw new OmittedTurnResultError(
+                  `Delegated turn ${turnId} has an omitted transcript result`,
+                );
               }
               if (message.type === 'assistant' && message.text.trim()) result = message.text;
             }
