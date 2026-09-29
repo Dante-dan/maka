@@ -22,7 +22,6 @@ import { syncUiLocaleDocument } from '@maka/ui';
 import { App } from './app';
 import { applyCachedThemeBeforeMount } from './cached-theme-bootstrap';
 import './styles.css';
-import './astryx-hover-markers';
 import { readSystemUiLocale } from './use-system-ui-locale';
 import {
   createDesktopFeatureServices,
