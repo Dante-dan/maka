@@ -53,8 +53,9 @@ Code and focused tests are the final authority. Windows enforcement work is trac
 - Unrestricted, disabled, and external profiles do not add a Maka-managed local sandbox.
 - `require` forces platform sandbox selection; `forbid` selects host execution and is an internal orchestration input, not proof of approval.
 - macOS selects the Seatbelt backend and fails closed when the backend is unavailable.
-- Writable sandboxed macOS commands admit the selected CLT/Xcode library roots only after Apple-anchor signature verification. Selection and verification each have a one-second subprocess timeout; failure adds no roots. Read-only and unsandboxed commands perform no toolchain discovery.
+- Writable sandboxed macOS commands admit the selected CLT/Xcode library roots only after Apple-anchor signature verification. Selection and verification use nonblocking subprocesses, each with a one-second timeout; failure adds no roots. Read-only and unsandboxed commands perform no toolchain discovery.
 - Explicit path denies also apply to executable and runtime-readable roots, including filesystem-worker dependency roots. A deny overlapping required libraries can prevent worker startup; these implementation grants do not override the requested boundary.
+- `DEVELOPER_DIR` is a trusted Host-process setting, not a model or plugin input. Apple-signature verification authenticates `libxcrun.dylib`, not the entire toolchain tree; the Host must choose an installation whose library directories it trusts.
 - The selected toolchain is canonicalized and revalidated immediately before policy construction, without process-lifetime caching. Its canonical directory is not fd-pinned, so replacement before child startup remains a residual limitation.
 - Linux selects the bubblewrap backend and fails closed when its executable, namespace probe, or
   requested profile cannot be enforced.

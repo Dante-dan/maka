@@ -44,7 +44,7 @@ import {
 } from '../sandbox/macos-command-paths.js';
 
 describe('resolveMacosDeveloperExecutableRoots', () => {
-  it('accepts canonical and symlinked CommandLineTools layouts', () => {
+  it('accepts canonical and symlinked CommandLineTools layouts', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-clt-'));
     const developer = join(scratch, 'CommandLineTools');
     const library = join(developer, 'usr', 'lib');
@@ -54,14 +54,14 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     symlinkSync(developer, alias);
     try {
       assert.deepEqual(
-        resolveMacosDeveloperExecutableRoots({
+        await resolveMacosDeveloperExecutableRoots({
           developerDir: developer,
           validateAppleBinary: () => true,
         }),
         [realpathSync(library)],
       );
       assert.deepEqual(
-        resolveMacosDeveloperExecutableRoots({
+        await resolveMacosDeveloperExecutableRoots({
           developerDir: alias,
           validateAppleBinary: () => true,
         }),
@@ -72,7 +72,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
-  it('accepts only the library and SharedFrameworks directories from an Xcode layout', () => {
+  it('accepts only the library and SharedFrameworks directories from an Xcode layout', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-xcode-'));
     const contents = join(scratch, 'Xcode-beta.app', 'Contents');
     const developer = join(contents, 'Developer');
@@ -83,7 +83,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
     try {
       assert.deepEqual(
-        resolveMacosDeveloperExecutableRoots({
+        await resolveMacosDeveloperExecutableRoots({
           developerDir: developer,
           validateAppleBinary: () => true,
         }),
@@ -94,7 +94,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
-  it('rejects a SharedFrameworks symlink outside the Xcode bundle', () => {
+  it('rejects a SharedFrameworks symlink outside the Xcode bundle', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-xcode-frameworks-escape-'));
     const contents = join(scratch, 'Xcode.app', 'Contents');
     const developer = join(contents, 'Developer');
@@ -104,7 +104,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     symlinkSync('/', join(contents, 'SharedFrameworks'));
     try {
       assert.deepEqual(
-        resolveMacosDeveloperExecutableRoots({
+        await resolveMacosDeveloperExecutableRoots({
           developerDir: developer,
           validateAppleBinary: () => true,
         }),
@@ -115,7 +115,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
-  it('rejects a toolchain library symlink outside the selected developer directory', () => {
+  it('rejects a toolchain library symlink outside the selected developer directory', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-clt-library-escape-'));
     const developer = join(scratch, 'CommandLineTools');
     const externalLibrary = join(scratch, 'external-lib');
@@ -125,7 +125,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     symlinkSync(externalLibrary, join(developer, 'usr', 'lib'));
     try {
       assert.deepEqual(
-        resolveMacosDeveloperExecutableRoots({
+        await resolveMacosDeveloperExecutableRoots({
           developerDir: developer,
           validateAppleBinary: () => true,
         }),
@@ -136,28 +136,28 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
-  it('rejects root, home, ordinary directories, and unresolved symlinks', () => {
+  it('rejects root, home, ordinary directories, and unresolved symlinks', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-invalid-developer-'));
     const ordinary = join(scratch, 'ordinary');
     const dangling = join(scratch, 'dangling');
     mkdirSync(ordinary);
     symlinkSync(join(scratch, 'missing'), dangling);
     try {
-      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ developerDir: '/' }), []);
+      assert.deepEqual(await resolveMacosDeveloperExecutableRoots({ developerDir: '/' }), []);
       assert.deepEqual(
-        resolveMacosDeveloperExecutableRoots({ developerDir: scratch, homeDir: scratch }),
+        await resolveMacosDeveloperExecutableRoots({ developerDir: scratch, homeDir: scratch }),
         [],
       );
-      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ developerDir: ordinary }), []);
-      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ developerDir: dangling }), []);
+      assert.deepEqual(await resolveMacosDeveloperExecutableRoots({ developerDir: ordinary }), []);
+      assert.deepEqual(await resolveMacosDeveloperExecutableRoots({ developerDir: dangling }), []);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
   });
 
-  it('uses DEVELOPER_DIR before consulting xcode-select', () => {
+  it('uses DEVELOPER_DIR before consulting xcode-select', async () => {
     let selected = false;
-    resolveMacosDeveloperExecutableRoots({
+    await resolveMacosDeveloperExecutableRoots({
       developerDir: '/',
       selectDeveloperDir: () => {
         selected = true;
@@ -167,14 +167,14 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     assert.equal(selected, false);
   });
 
-  it('bounds both discovery subprocesses to one second and fails closed on timeout', () => {
+  it('bounds both discovery subprocesses to one second and fails closed on timeout', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-bounded-toolchain-'));
     const developer = join(scratch, 'CommandLineTools');
     const library = join(developer, 'usr', 'lib');
     mkdirSync(library, { recursive: true });
     writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
     const calls: Array<{ executable: string; args: readonly string[]; timeout: number }> = [];
-    const runCommand: MacosDeveloperCommandRunner = (executable, args, options) => {
+    const runCommand: MacosDeveloperCommandRunner = async (executable, args, options) => {
       calls.push({ executable, args, timeout: options.timeout });
       if (executable === '/usr/bin/xcode-select') {
         return { status: 0, stdout: `${developer}\n` };
@@ -182,7 +182,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
       return { status: null };
     };
     try {
-      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ runCommand }), []);
+      assert.deepEqual(await resolveMacosDeveloperExecutableRoots({ runCommand }), []);
       assert.deepEqual(calls, [
         { executable: '/usr/bin/xcode-select', args: ['-p'], timeout: 1_000 },
         {
@@ -201,18 +201,18 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
-  it('fails closed when developer-directory discovery times out', () => {
+  it('fails closed when developer-directory discovery times out', async () => {
     const calls: string[] = [];
-    const runCommand: MacosDeveloperCommandRunner = (executable) => {
+    const runCommand: MacosDeveloperCommandRunner = async (executable) => {
       calls.push(executable);
       return { status: null };
     };
 
-    assert.deepEqual(resolveMacosDeveloperExecutableRoots({ runCommand }), []);
+    assert.deepEqual(await resolveMacosDeveloperExecutableRoots({ runCommand }), []);
     assert.deepEqual(calls, ['/usr/bin/xcode-select']);
   });
 
-  it('returns a canonical root that is unaffected by later selector alias replacement', () => {
+  it('returns a canonical root that is unaffected by later selector alias replacement', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-replaced-selection-'));
     const first = join(scratch, 'first', 'CommandLineTools');
     const second = join(scratch, 'second', 'CommandLineTools');
@@ -224,7 +224,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
     symlinkSync(first, alias);
     try {
-      const roots = resolveMacosDeveloperExecutableRoots({
+      const roots = await resolveMacosDeveloperExecutableRoots({
         developerDir: alias,
         validateAppleBinary: () => true,
       });
@@ -236,14 +236,14 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
     }
   });
 
-  it('rejects a structurally plausible toolchain containing a non-Mach-O libxcrun', () => {
+  it('rejects a structurally plausible toolchain containing a non-Mach-O libxcrun', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-unsigned-clt-'));
     const developer = join(scratch, 'CommandLineTools');
     const library = join(developer, 'usr', 'lib');
     mkdirSync(library, { recursive: true });
     writeFileSync(join(library, 'libxcrun.dylib'), 'not signed');
     try {
-      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ developerDir: developer }), []);
+      assert.deepEqual(await resolveMacosDeveloperExecutableRoots({ developerDir: developer }), []);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -251,7 +251,7 @@ describe('resolveMacosDeveloperExecutableRoots', () => {
 });
 
 describe('Apple signer validation', { skip: process.platform !== 'darwin' }, () => {
-  it('rejects a valid ad-hoc-signed dylib in a plausible toolchain', () => {
+  it('rejects a valid ad-hoc-signed dylib in a plausible toolchain', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-adhoc-clt-'));
     const developer = join(scratch, 'CommandLineTools');
     const library = join(developer, 'usr', 'lib');
@@ -272,7 +272,7 @@ describe('Apple signer validation', { skip: process.platform !== 'darwin' }, () 
         encoding: 'utf8',
       });
       assert.equal(verify.status, 0, verify.stderr);
-      assert.deepEqual(resolveMacosDeveloperExecutableRoots({ developerDir: developer }), []);
+      assert.deepEqual(await resolveMacosDeveloperExecutableRoots({ developerDir: developer }), []);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -280,7 +280,7 @@ describe('Apple signer validation', { skip: process.platform !== 'darwin' }, () 
 });
 
 describe('resolveMacosCommandPaths', () => {
-  it('does not add selected developer roots to restricted read-only profiles', () => {
+  it('does not add selected developer roots to restricted read-only profiles', async () => {
     let validated = false;
     const scratch = mkdtempSync(join(tmpdir(), 'maka-read-only-toolchain-'));
     const developer = join(scratch, 'CommandLineTools');
@@ -289,7 +289,7 @@ describe('resolveMacosCommandPaths', () => {
     writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
     try {
       assert.deepEqual(
-        resolveMacosCommandPaths(
+        await resolveMacosCommandPaths(
           createReadOnlyPermissionProfile(),
           { DEVELOPER_DIR: developer },
           {
@@ -307,7 +307,7 @@ describe('resolveMacosCommandPaths', () => {
     }
   });
 
-  it('adds only validated developer roots to writable command profiles', () => {
+  it('adds only validated developer roots to writable command profiles', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'maka-writable-toolchain-'));
     const developer = join(scratch, 'CommandLineTools');
     const library = join(developer, 'usr', 'lib');
@@ -315,7 +315,7 @@ describe('resolveMacosCommandPaths', () => {
     writeFileSync(join(library, 'libxcrun.dylib'), 'fixture');
     try {
       assert.deepEqual(
-        resolveMacosCommandPaths(
+        await resolveMacosCommandPaths(
           createWorkspaceWritePermissionProfile(),
           { DEVELOPER_DIR: developer },
           { validateAppleBinary: () => true },

@@ -176,7 +176,7 @@ describe('macOS Seatbelt smoke', { skip: !canRunSeatbelt }, () => {
     });
     assert.equal(setup.status, 0, setup.stderr);
 
-    const runtimePaths = resolveMacosCommandPaths(
+    const runtimePaths = await resolveMacosCommandPaths(
       createWorkspaceWritePermissionProfile(),
       gitEnvironment,
     );

@@ -226,8 +226,8 @@ export function buildBuiltinTools(options: BuildBuiltinToolsOptions = {}): MakaT
           declareSandboxBoundary: options.declareSandboxBoundary !== false,
           ...(options.sandboxManager
             ? {
-                transformCommand: ({ command, pty, requiredBoundary, ctx }) => {
-                  const transformed = sandboxCommand(
+                transformCommand: async ({ command, pty, requiredBoundary, ctx }) => {
+                  const transformed = await sandboxCommand(
                     options.sandboxManager!,
                     options.permissionProfile,
                     sandboxPlatform,
@@ -687,7 +687,7 @@ function buildExecutorBashTool(
         });
       }
       const transformed = sandboxOptions.sandboxManager
-        ? sandboxCommand(
+        ? await sandboxCommand(
             sandboxOptions.sandboxManager,
             sandboxOptions.permissionProfile,
             sandboxOptions.sandboxPlatform,
@@ -736,7 +736,7 @@ function buildExecutorBashTool(
   };
 }
 
-function sandboxCommand(
+async function sandboxCommand(
   manager: SandboxManager,
   explicitProfile: PermissionProfile | undefined,
   platform: SandboxPlatform,
@@ -746,7 +746,7 @@ function sandboxCommand(
   requiredBoundary?: SandboxBoundaryExpansion,
   domain: 'command' | 'background_command' = 'command',
   environment?: Readonly<Record<string, string | undefined>>,
-):
+): Promise<
   | {
       argv?: readonly string[];
       cwd: string;
@@ -756,7 +756,8 @@ function sandboxCommand(
       profileName?: string;
       onCompletion?: (outcome: { successful: boolean }) => void;
     }
-  | undefined {
+  | undefined
+> {
   const cwd = canonicalExistingPath(ctx.cwd);
   const boundary = ctx.executionBoundary;
   if (boundary?.kind === 'bypass' || boundary?.kind === 'external') return undefined;
@@ -834,13 +835,13 @@ function sandboxCommand(
     });
   }
   const onCompletion = preparedProfilePathCompletion(preparedProfile.paths);
-  // Discovery is deliberately adjacent to policy construction. The selected
+  // Nonblocking discovery is deliberately adjacent to policy construction. The selected
   // path is canonicalized and code-sign validated, but is not fd-pinned;
   // replacement after this point remains a documented residual limitation.
   const macosPaths =
     platform === 'darwin'
       ? manager.shouldSandbox(effective.profile)
-        ? resolveMacosCommandPaths(effective.profile, env)
+        ? await resolveMacosCommandPaths(effective.profile, env)
         : { executableRoots: [] }
       : undefined;
 

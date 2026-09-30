@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -40,7 +40,7 @@ export type MacosDeveloperCommandRunner = (
     timeout: number;
     stdio: ['ignore', 'pipe', 'ignore'] | 'ignore';
   },
-) => MacosDeveloperCommandResult;
+) => MacosDeveloperCommandResult | Promise<MacosDeveloperCommandResult>;
 
 export interface MacosCommandPaths {
   executableRoots: readonly string[];
@@ -49,19 +49,19 @@ export interface MacosCommandPaths {
 export interface MacosDeveloperPathOptions {
   developerDir?: string;
   homeDir?: string;
-  selectDeveloperDir?: () => string | undefined;
-  validateAppleBinary?: (path: string) => boolean;
+  selectDeveloperDir?: () => string | undefined | Promise<string | undefined>;
+  validateAppleBinary?: (path: string) => boolean | Promise<boolean>;
   runCommand?: MacosDeveloperCommandRunner;
 }
 
 /** Resolve only the dynamic-library directories used by the selected Apple toolchain. */
-export function resolveMacosDeveloperExecutableRoots(
+export async function resolveMacosDeveloperExecutableRoots(
   options: MacosDeveloperPathOptions = {},
-): readonly string[] {
+): Promise<readonly string[]> {
   const runCommand = options.runCommand ?? runDeveloperCommand;
   const selected =
     options.developerDir?.trim() ||
-    (options.selectDeveloperDir ?? (() => readSelectedDeveloperDirectory(runCommand)))();
+    (await (options.selectDeveloperDir ?? (() => readSelectedDeveloperDirectory(runCommand)))());
   if (!selected || !isAbsolute(selected)) return [];
 
   let developerRoot: string;
@@ -79,9 +79,9 @@ export function resolveMacosDeveloperExecutableRoots(
   const xcrunLibrary = canonicalRegularFile(join(libraryRoot, 'libxcrun.dylib'));
   if (!xcrunLibrary || !isPathWithin(xcrunLibrary, libraryRoot)) return [];
   if (
-    !(options.validateAppleBinary ?? ((path) => validateAppleBinary(path, runCommand)))(
+    !(await (options.validateAppleBinary ?? ((path) => validateAppleBinary(path, runCommand)))(
       xcrunLibrary,
-    )
+    ))
   ) {
     return [];
   }
@@ -98,18 +98,18 @@ export function resolveMacosDeveloperExecutableRoots(
   return [libraryRoot, sharedFrameworks];
 }
 
-export function resolveMacosCommandPaths(
+export async function resolveMacosCommandPaths(
   profile: PermissionProfile,
   env: Readonly<Record<string, string | undefined>>,
   options: Omit<MacosDeveloperPathOptions, 'developerDir' | 'homeDir'> = {},
-): MacosCommandPaths {
+): Promise<MacosCommandPaths> {
   // Runtime roots are an implementation allowance for writable command
   // sessions. They must not silently widen a restricted read-only profile.
   if (profile.type === 'managed' && isReadOnlyPermissionProfile(profile)) {
     return { executableRoots: [] };
   }
   return {
-    executableRoots: resolveMacosDeveloperExecutableRoots({
+    executableRoots: await resolveMacosDeveloperExecutableRoots({
       developerDir: env.DEVELOPER_DIR,
       homeDir: env.HOME,
       ...options,
@@ -117,10 +117,10 @@ export function resolveMacosCommandPaths(
   };
 }
 
-function readSelectedDeveloperDirectory(
+async function readSelectedDeveloperDirectory(
   runCommand: MacosDeveloperCommandRunner,
-): string | undefined {
-  const result = runCommand('/usr/bin/xcode-select', ['-p'], {
+): Promise<string | undefined> {
+  const result = await runCommand('/usr/bin/xcode-select', ['-p'], {
     encoding: 'utf8',
     timeout: XCODE_SELECT_TIMEOUT_MS,
     stdio: ['ignore', 'pipe', 'ignore'],
@@ -128,8 +128,11 @@ function readSelectedDeveloperDirectory(
   return result.status === 0 ? result.stdout?.trim() || undefined : undefined;
 }
 
-function validateAppleBinary(path: string, runCommand: MacosDeveloperCommandRunner): boolean {
-  const result = runCommand(
+async function validateAppleBinary(
+  path: string,
+  runCommand: MacosDeveloperCommandRunner,
+): Promise<boolean> {
+  const result = await runCommand(
     '/usr/bin/codesign',
     ['--verify', '--strict', '-R=anchor apple', path],
     {
@@ -140,13 +143,20 @@ function validateAppleBinary(path: string, runCommand: MacosDeveloperCommandRunn
   return result.status === 0;
 }
 
-const runDeveloperCommand: MacosDeveloperCommandRunner = (executable, args, options) => {
-  const result = spawnSync(executable, [...args], options);
-  return {
-    status: result.status,
-    ...(typeof result.stdout === 'string' ? { stdout: result.stdout } : {}),
-  };
-};
+const runDeveloperCommand: MacosDeveloperCommandRunner = (executable, args, options) =>
+  new Promise((resolve) => {
+    execFile(
+      executable,
+      [...args],
+      { encoding: 'utf8', timeout: options.timeout, maxBuffer: 64 * 1024 },
+      (error, stdout) => {
+        resolve({
+          status: error ? (typeof error.code === 'number' ? error.code : null) : 0,
+          ...(options.encoding === 'utf8' ? { stdout } : {}),
+        });
+      },
+    );
+  });
 
 function canonicalDirectory(path: string): string | undefined {
   try {
