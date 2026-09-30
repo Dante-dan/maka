@@ -16,10 +16,10 @@ Locations intentionally omit line numbers so unrelated edits do not invalidate t
 | Classification | Count |
 |---|---:|
 | windows-backend-gap | 27 |
-| portable-candidate | 51 |
+| portable-candidate | 52 |
 | platform-contract | 41 |
 
-Total Windows-excluded declarations: **119**
+Total Windows-excluded declarations: **120**
 
 ## Inventory
 
@@ -144,3 +144,4 @@ Total Windows-excluded declarations: **119**
 | portable-candidate | `scripts/qualify-released-cli-state-root.test.mjs` starts the liveness window after the real Runtime Host is ready | `process.platform === 'win32'` |
 | portable-candidate | `scripts/qualify-released-cli-state-root.test.mjs` rejects a Runtime Host that fails verifier shutdown | `process.platform === 'win32'` |
 | portable-candidate | `scripts/release-cli-eval-support.test.mjs` preserves the primary process failure when diagnostics cannot be read | `process.platform === 'win32'` |
+| portable-candidate | `scripts/verify-packaged-app.test.mjs` stopChild waits for a process that ignores SIGTERM to exit before returning | `process.platform === 'win32'` |

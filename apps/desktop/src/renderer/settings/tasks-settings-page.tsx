@@ -31,6 +31,8 @@ import type { DesktopSessionSummary } from '../../preload/bridge-contract.js';
 import type { SessionCatalogController } from '../application/contracts/session-catalog/session-catalog-state.js';
 import { getSettingsSharedCopy } from '../locales/settings-shared-copy.js';
 import { getSettingsTasksCopy } from '../locales/settings-tasks-copy.js';
+import { getStorageUsageCopy } from '../locales/storage-usage-copy.js';
+import { TaskStorageSize } from '../features/storage-usage/index.js';
 import { settingsActionErrorMessage } from './settings-error-copy';
 import { SettingsPage, SettingsSection } from './settings-section';
 import {
@@ -103,8 +105,7 @@ export function TasksSettingsPage(
     [copy.noProject, projectNames],
   );
 
-  // Store order is already recency-first with a stable id tie-break, and the
-  // projection preserves it, so there is nothing left to sort here.
+  // Most recently archived first; `archivedTaskRows` owns the order.
   const archived = useMemo(() => archivedTaskRows(props.sessions), [props.sessions]);
   const knownSessionIds = useMemo(
     () => new Set(props.sessions.map((session) => session.id)),
@@ -213,14 +214,15 @@ export function TasksSettingsPage(
           label={isSearching ? copy.purgeMatches(visible.length) : copy.purgeAll}
         />
       </HStack>
-      <SettingsSection>
+      <SettingsSection description={getStorageUsageCopy(locale).taskSizeNote}>
         {visible.length === 0 ? (
           <EmptyState isCompact title={copy.noMatchTitle} description={copy.noMatchBody} />
         ) : (
           <List density="balanced" hasDividers aria-label={copy.listAria}>
             {visible.map((session) => {
+              const now = Date.now();
               const updated = session.lastMessageAt
-                ? formatCompactTimestamp(session.lastMessageAt, Date.now(), locale)
+                ? formatCompactTimestamp(session.lastMessageAt, now, locale)
                 : undefined;
               const description = [
                 isOrphanedSubagentTask(session, knownSessionIds)
@@ -228,6 +230,11 @@ export function TasksSettingsPage(
                   : undefined,
                 projectLabelOf(session),
                 updated,
+                // An unknown time is said as such, never borrowed from the
+                // last message, which the row already shows as its own fact.
+                session.archivedAt === undefined
+                  ? copy.archiveTimeUnknown
+                  : copy.archivedAt(formatCompactTimestamp(session.archivedAt, now, locale)),
               ]
                 .filter(Boolean)
                 .join(' · ');
@@ -239,6 +246,7 @@ export function TasksSettingsPage(
                   startContent={<Archive size={ICON_SIZE.control} aria-hidden="true" />}
                   endContent={
                     <>
+                      <TaskStorageSize sessionId={session.id} />
                       <IconButton
                         variant="ghost"
                         size="sm"

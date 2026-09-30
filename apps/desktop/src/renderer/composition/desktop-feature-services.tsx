@@ -20,7 +20,9 @@
 import type { ReactNode } from 'react';
 import { WorkHubServicesProvider } from '../features/workhub';
 import { createDesktopWorkHubServices } from '../platform/desktop/create-workhub-services';
-import { ConversationServicesProvider } from '../features/conversation';
+import { ConversationServicesProvider, PlanServicesProvider, ComposerStagingServicesProvider } from '../features/conversation';
+import { createDesktopComposerStagingServices } from '../platform/desktop/create-composer-staging-services.js';
+import { createDesktopConversationPlanServices } from '../platform/desktop/create-conversation-plan-services.js';
 import { createDesktopConversationServices } from '../platform/desktop/create-conversation-services';
 import { AppUpdateServicesProvider } from '../features/app-update/index.js';
 import {
@@ -48,6 +50,8 @@ import { createDesktopRuntimeHostManagementServices } from '../platform/desktop/
 import { createDesktopSessionCollaborationServices } from '../platform/desktop/create-session-collaboration-services';
 import { createDesktopSessionNavigationServices } from '../platform/desktop/create-session-navigation-services';
 import { SessionBundleServicesProvider } from '../features/session-bundle';
+import { StorageUsageServicesProvider } from '../features/storage-usage';
+import { createDesktopStorageUsageServices } from '../platform/desktop/create-storage-usage-services.js';
 import { createDesktopSessionBundleServices } from '../platform/desktop/create-session-bundle-services.js';
 import { createDesktopSessionSettingsServices } from '../platform/desktop/create-session-settings-services';
 import { createDesktopTaskEntryServices } from '../platform/desktop/create-task-entry-services';
@@ -75,6 +79,8 @@ export function createDesktopFeatureServices() {
     clientPlugins: createDesktopClientPluginServices(),
     workHub: createDesktopWorkHubServices(),
     conversation: createDesktopConversationServices(),
+    conversationPlan: createDesktopConversationPlanServices(),
+    composerStaging: createDesktopComposerStagingServices(),
     connectionSettings: createDesktopConnectionSettingsServices(),
     externalAgentSettings: createDesktopExternalAgentSettingsServices(),
     goal: createDesktopGoalServices(),
@@ -85,6 +91,7 @@ export function createDesktopFeatureServices() {
     sessionNavigation: createDesktopSessionNavigationServices(),
     sessionBundle: createDesktopSessionBundleServices(),
     sessionSettings: createDesktopSessionSettingsServices(),
+    storageUsage: createDesktopStorageUsageServices(),
     taskEntry: createDesktopTaskEntryServices(),
     workbar: createDesktopWorkbarServices(),
   };
@@ -110,13 +117,19 @@ export function DesktopFeatureServicesProvider(props: {
                     <GoalServicesProvider services={props.services.goal}>
                       <WorkbarServicesProvider services={props.services.workbar}>
                         <ConversationServicesProvider services={props.services.conversation}>
-                          <WorkHubServicesProvider services={props.services.workHub}>
-                            <SessionBundleServicesProvider services={props.services.sessionBundle}>
-                              <OverlaysServicesProvider services={props.services.overlays}>
-                                {props.children}
-                              </OverlaysServicesProvider>
-                            </SessionBundleServicesProvider>
-                          </WorkHubServicesProvider>
+                          <PlanServicesProvider services={props.services.conversationPlan}>
+                          <ComposerStagingServicesProvider services={props.services.composerStaging}>
+                            <WorkHubServicesProvider services={props.services.workHub}>
+                              <SessionBundleServicesProvider services={props.services.sessionBundle}>
+                                <OverlaysServicesProvider services={props.services.overlays}>
+                                  <StorageUsageServicesProvider services={props.services.storageUsage}>
+                                    {props.children}
+                                  </StorageUsageServicesProvider>
+                                </OverlaysServicesProvider>
+                              </SessionBundleServicesProvider>
+                            </WorkHubServicesProvider>
+                          </ComposerStagingServicesProvider>
+                          </PlanServicesProvider>
                         </ConversationServicesProvider>
                       </WorkbarServicesProvider>
                     </GoalServicesProvider>
