@@ -26,6 +26,8 @@ import { buildAbortableConnector } from './abortable-connector.js';
 
 export const FETCH_PROXY_SNAPSHOT = Symbol.for('maka.fetch.proxy-snapshot');
 
+const TRANSPORT_CLOSE_GRACE_MS = 1_000;
+
 export interface ConnectionEffectProxySnapshot {
   readonly enabled: boolean;
   readonly type: ProxySettings['type'];
@@ -105,7 +107,7 @@ export function createProxiedFetchTransport(
     if (closePromise) return closePromise;
     closed = true;
     connections.abort(new Error('Connection effect fetch transport closed'));
-    closePromise = Promise.all([
+    const destroyed = Promise.all([
       directDispatcher
         .destroy(new Error('Connection effect fetch transport closed'))
         .catch(() => {}),
@@ -113,6 +115,15 @@ export function createProxiedFetchTransport(
         ?.destroy(new Error('Connection effect fetch transport closed'))
         .catch(() => {}),
     ]).then(() => undefined);
+    // Aborting a CONNECT tunnel can leave Undici's dispatcher destroy pending.
+    // Sockets are already cancelled; best-effort teardown must not wedge callers.
+    let deadline: ReturnType<typeof setTimeout>;
+    closePromise = Promise.race([
+      destroyed,
+      new Promise<void>((resolve) => {
+        deadline = setTimeout(resolve, TRANSPORT_CLOSE_GRACE_MS);
+      }),
+    ]).finally(() => clearTimeout(deadline));
     return closePromise;
   };
 
