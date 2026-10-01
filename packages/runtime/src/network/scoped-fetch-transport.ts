@@ -106,7 +106,6 @@ export function createProxiedFetchTransport(
   const close = (): Promise<void> => {
     if (closePromise) return closePromise;
     closed = true;
-    connections.abort(new Error('Connection effect fetch transport closed'));
     const destroyed = Promise.all([
       directDispatcher
         .destroy(new Error('Connection effect fetch transport closed'))
@@ -115,8 +114,10 @@ export function createProxiedFetchTransport(
         ?.destroy(new Error('Connection effect fetch transport closed'))
         .catch(() => {}),
     ]).then(() => undefined);
-    // Aborting a CONNECT tunnel can leave Undici's dispatcher destroy pending.
-    // Sockets are already cancelled; best-effort teardown must not wedge callers.
+    // Let dispatchers begin teardown before aborting CONNECT tunnels, so Undici
+    // can retire HTTP/2 sessions before their sockets disappear. Abort still
+    // cancels pending connects and handshakes; retain a bound for stalled teardown.
+    connections.abort(new Error('Connection effect fetch transport closed'));
     let deadline: ReturnType<typeof setTimeout>;
     closePromise = Promise.race([
       destroyed,

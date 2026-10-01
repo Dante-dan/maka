@@ -20,6 +20,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
+import { createSecureServer as createHttp2Server } from 'node:http2';
 import tls from 'node:tls';
 import net from 'node:net';
 import { getEventListeners } from 'node:events';
@@ -476,47 +477,54 @@ describe('connection effect network transport', () => {
     }
   });
 
-  for (const stalledDestroy of [false, true]) {
-    test(`close settles after a successful HTTP CONNECT request (destroy stalled: ${stalledDestroy})`, async (t) => {
-      const body = modelPayload('proxy-model');
-      const originalConnect = tls.connect;
-      t.mock.method(tls, 'connect', (options: tls.ConnectionOptions, callback?: () => void) =>
-        originalConnect({ ...options, ca: CONNECT_TEST_CERT }, callback),
-      );
-      const proxy = await startSuccessfulTlsConnectProxy(body);
-      const transport = createConnectionEffectFetchTransport({
-        ...PROXY_DEFAULTS,
-        enabled: true,
-        type: 'http',
-        host: '127.0.0.1',
-        port: proxy.port,
-        bypassList: [],
-      });
-      try {
-        const response = await transport.fetch('https://provider.invalid/v1/models');
-        assert.equal(response.status, 200);
-        assert.equal(await response.text(), body);
-        assert.equal(proxy.sockets.size, 2);
-        const socketsClosed = Promise.all([...proxy.sockets].map(waitForSocketClose));
-        if (stalledDestroy) {
-          // Reproduce the dispatcher completion failure independently of Undici/Node version.
-          t.mock.method(ProxyAgent.prototype, 'destroy', () => new Promise<void>(() => {}));
-        }
-        const closed = transport.close();
-        assert.equal(transport.close(), closed);
-        await withTimeout(closed, 2_000, 'completed CONNECT tunnel blocked transport.close()');
-        await withTimeout(socketsClosed, 1_000, 'CONNECT tunnel survived transport.close()');
-        assert.equal(proxy.sockets.size, 0);
-        await assert.rejects(
-          transport.fetch('https://provider.invalid/v1/models'),
-          /transport is closed/,
+  for (const protocol of ['http/1.1', 'h2'] as const) {
+    for (const stalledDestroy of [false, true]) {
+      test(`close settles after a successful ${protocol} CONNECT request (destroy stalled: ${stalledDestroy})`, async (t) => {
+        const body = modelPayload('proxy-model');
+        const originalConnect = tls.connect;
+        t.mock.method(tls, 'connect', (options: tls.ConnectionOptions, callback?: () => void) =>
+          originalConnect({ ...options, ca: CONNECT_TEST_CERT }, callback),
         );
-      } finally {
-        // Also release the server if a regression leaves dispatcher teardown pending.
-        void transport.close();
-        await proxy.close();
-      }
-    });
+        const proxy = await startSuccessfulTlsConnectProxy(body, protocol);
+        const transport = createConnectionEffectFetchTransport({
+          ...PROXY_DEFAULTS,
+          enabled: true,
+          type: 'http',
+          host: '127.0.0.1',
+          port: proxy.port,
+          bypassList: [],
+        });
+        try {
+          const response = await transport.fetch('https://provider.invalid/v1/models');
+          assert.equal(response.status, 200);
+          assert.equal(await response.text(), body);
+          assert.equal(proxy.httpVersion, protocol === 'h2' ? '2.0' : '1.1');
+          assert.equal(proxy.sockets.size, 2);
+          const socketsClosed = Promise.all([...proxy.sockets].map(waitForSocketClose));
+          if (stalledDestroy) {
+            // Reproduce the dispatcher completion failure independently of Undici/Node version.
+            t.mock.method(ProxyAgent.prototype, 'destroy', () => new Promise<void>(() => {}));
+          }
+          const closed = transport.close();
+          assert.equal(transport.close(), closed);
+          await withTimeout(
+            closed,
+            stalledDestroy ? 2_000 : 750,
+            'completed CONNECT tunnel blocked transport.close()',
+          );
+          await withTimeout(socketsClosed, 1_000, 'CONNECT tunnel survived transport.close()');
+          assert.equal(proxy.sockets.size, 0);
+          await assert.rejects(
+            transport.fetch('https://provider.invalid/v1/models'),
+            /transport is closed/,
+          );
+        } finally {
+          // Also release the server if a regression leaves dispatcher teardown pending.
+          void transport.close();
+          await proxy.close();
+        }
+      });
+    }
   }
 
   test('close terminates owned proxy resources and rejects later fetches', async () => {
@@ -823,20 +831,27 @@ describe('connection effect network transport', () => {
   });
 });
 
-async function startSuccessfulTlsConnectProxy(body: string) {
+async function startSuccessfulTlsConnectProxy(body: string, protocol: 'http/1.1' | 'h2') {
   const sockets = new Set<net.Socket>();
   const track = (socket: net.Socket) => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
     socket.on('error', () => {});
   };
-  const target = createHttpsServer(
-    { key: CONNECT_TEST_KEY, cert: CONNECT_TEST_CERT },
-    (_req, res) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(body);
-    },
-  );
+  let httpVersion: string | undefined;
+  const options = { key: CONNECT_TEST_KEY, cert: CONNECT_TEST_CERT };
+  const target =
+    protocol === 'h2'
+      ? createHttp2Server(options, (req, res) => {
+          httpVersion = req.httpVersion;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(body);
+        })
+      : createHttpsServer(options, (req, res) => {
+          httpVersion = req.httpVersion;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(body);
+        });
   const targetPort = await listen(target);
   const proxy = createServer();
   proxy.on('connect', (request, socket, head) => {
@@ -854,6 +869,9 @@ async function startSuccessfulTlsConnectProxy(body: string) {
   return {
     port: await listen(proxy),
     sockets,
+    get httpVersion() {
+      return httpVersion;
+    },
     async close() {
       for (const socket of sockets) socket.destroy();
       await Promise.all([closeServer(proxy), closeServer(target)]);
