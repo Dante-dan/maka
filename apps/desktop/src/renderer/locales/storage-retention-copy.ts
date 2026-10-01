@@ -17,7 +17,23 @@
  * under the License.
  */
 
-import type { UiLocale } from '@maka/core/ui-locale';
+import type { UiCatalog, UiLocale } from '@maka/core/ui-locale';
+interface StorageRetentionCopy {
+  title: string;
+  help: string;
+  enabled: string;
+  days: string;
+  refresh: string;
+  loading: string;
+  failed: string;
+  dayOption: (days: number) => string;
+  preview: (count: number, date: string) => string;
+  disabled: string;
+  cleanup: (count: number, size: string, date: string) => string;
+  unknownBytes: string;
+  needsReview: (count: number) => string;
+}
+
 const COPY = {
   en: {
     title: 'Automatic cleanup on this Host',
@@ -44,5 +60,5 @@ const COPY = {
     disabled: '自動刪除已關閉。', cleanup: (count: number, size: string, date: string) => `上次自動清理：${date} 刪除了 ${count} 個任務（${size}）。`,
     unknownBytes: '大小未知', needsReview: (count: number) => `${count} 個任務需要手動檢查。`,
   },
-};
+} satisfies UiCatalog<StorageRetentionCopy>;
 export function getStorageRetentionCopy(locale: UiLocale) { return COPY[locale]; }
