@@ -105,7 +105,7 @@ export const RUNTIME_HOST_REGISTRATION_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_HOST_PROTOCOL_VERSION = 0 as const;
 // Increment when the same protocol version no longer guarantees safe Client-Host
 // interoperability. Mismatches are rejected before domain commands are admitted.
-export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 203 as const;
+export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 204 as const;
 // 203: Host-owned opt-in retention query/set and automatic archived-task cleanup.
 // 202: `session.remove.preview` takes a bounded list of Sessions and reports the
 // child tasks, worktrees and optionally the bytes their removal would delete;

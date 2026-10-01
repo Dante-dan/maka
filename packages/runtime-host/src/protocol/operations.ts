@@ -361,6 +361,8 @@ export const REMOTE_OWNER_OPERATION_GRANTS = Object.freeze([
   'skill.catalog.mutate',
   'skill.catalog.preview-update',
   'skill.catalog.query',
+  'storage.retention.query',
+  'storage.retention.set',
   'storage.usage.query',
   'storage.usage.sessions.query',
   'subscription.close',
