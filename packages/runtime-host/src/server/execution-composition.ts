@@ -2851,7 +2851,6 @@ export async function createExecutionRuntimeHostComposition(
       policy: await HostStorageRetentionPolicy.open(context.owner.capability.canonicalPath),
       stores: stores.sessionStore,
       retirement: sessionRetirement,
-      footprint: storage.footprint,
       stateRoot: context.owner.capability.canonicalPath,
     });
     const storageMaintenance = new HostStorageMaintenance({

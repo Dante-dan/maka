@@ -317,6 +317,11 @@ export class HostSessionRetirementCoordinator {
     }
   }
 
+  async estimateRetentionBytes(sessionId: string): Promise<number | undefined> {
+    const plan = await this.#readRemovalPlanSessionIds(sessionId);
+    return this.#measureRemoved(plan.removeSessionIds);
+  }
+
   /** Host-internal unattended removal; clients cannot weaken these guards. */
   async removeForRetention(
     input: SessionRemoveInput,
@@ -392,6 +397,7 @@ export class HostSessionRetirementCoordinator {
       return removeFailure('persistence_failed', 'Session removal state is unavailable');
     }
     if (probe.kind === 'removed') {
+      if (retention) return removeOutcome({ kind: 'too_recent', sessionId: input.sessionId });
       try {
         this.#scheduleCleanup(
           await this.#stores.listPendingSessionRetirementCleanupIds(input.sessionId),

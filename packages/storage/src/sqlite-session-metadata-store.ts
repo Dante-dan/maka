@@ -1521,6 +1521,8 @@ export class SqliteSessionMetadataStore {
       WHERE metadata.is_flagged = 0 AND metadata.is_archived = 1
         AND (metadata.archived_at IS NULL OR metadata.archived_at <= ?)
         AND ${role.sql}
+        AND COALESCE(json_extract(metadata.payload_json, '$.conversationCopy.state'), '') != 'preparing'
+        AND COALESCE(json_extract(metadata.payload_json, '$.revisionState'), '') != 'preparing'
         AND (metadata.subagent_parent_session_id IS NULL OR NOT EXISTS (
           SELECT 1 FROM session_metadata parent WHERE parent.session_id = metadata.subagent_parent_session_id
         ))

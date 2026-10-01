@@ -17,11 +17,9 @@
  * under the License.
  */
 
-import { randomUUID } from 'node:crypto';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ExecutionSessionWriter } from '@maka/storage/execution-stores';
-import type { InteractiveStorageFootprintReader } from '@maka/storage/storage-writer-composition';
 import {
   decodeStorageRetentionQueryResult,
   type StorageRetentionQueryResult,
@@ -34,6 +32,7 @@ import {
   HostStorageRetentionPolicy,
   RETENTION_DAY_MS,
   retentionDeadline,
+  writeRetentionDocument,
 } from './storage-retention-policy.js';
 
 export class HostStorageRetentionCoordinator {
@@ -80,8 +79,10 @@ export class HostStorageRetentionCoordinator {
   };
   readonly #policy: HostStorageRetentionPolicy;
   readonly #stores: Pick<ExecutionSessionWriter, 'listRetentionCandidates' | 'readCatalogRecord'>;
-  readonly #retirement: Pick<HostSessionRetirementCoordinator, 'removeForRetention'>;
-  readonly #footprint: Pick<InteractiveStorageFootprintReader, 'measureSessions'>;
+  readonly #retirement: Pick<
+    HostSessionRetirementCoordinator,
+    'removeForRetention' | 'estimateRetentionBytes'
+  >;
   readonly #path: string;
   readonly #now: () => number;
   #latestTime = 0;
@@ -93,15 +94,16 @@ export class HostStorageRetentionCoordinator {
   private constructor(input: {
     policy: HostStorageRetentionPolicy;
     stores: Pick<ExecutionSessionWriter, 'listRetentionCandidates' | 'readCatalogRecord'>;
-    retirement: Pick<HostSessionRetirementCoordinator, 'removeForRetention'>;
-    footprint: Pick<InteractiveStorageFootprintReader, 'measureSessions'>;
+    retirement: Pick<
+      HostSessionRetirementCoordinator,
+      'removeForRetention' | 'estimateRetentionBytes'
+    >;
     stateRoot: string;
     now?: () => number;
   }) {
     this.#policy = input.policy;
     this.#stores = input.stores;
     this.#retirement = input.retirement;
-    this.#footprint = input.footprint;
     this.#path = join(input.stateRoot, 'storage-retention-results.json');
     this.#now = input.now ?? Date.now;
   }
@@ -130,8 +132,10 @@ export class HostStorageRetentionCoordinator {
   static create(input: {
     policy: HostStorageRetentionPolicy;
     stores: Pick<ExecutionSessionWriter, 'listRetentionCandidates' | 'readCatalogRecord'>;
-    retirement: Pick<HostSessionRetirementCoordinator, 'removeForRetention'>;
-    footprint: Pick<InteractiveStorageFootprintReader, 'measureSessions'>;
+    retirement: Pick<
+      HostSessionRetirementCoordinator,
+      'removeForRetention' | 'estimateRetentionBytes'
+    >;
     stateRoot: string;
     now?: () => number;
   }): HostStorageRetentionCoordinator {
@@ -169,15 +173,7 @@ export class HostStorageRetentionCoordinator {
         if (deadline === null || at <= deadline) continue;
         let estimated: number | undefined;
         try {
-          estimated = (await this.#footprint.measureSessions([id])).reduce(
-            (total, item) =>
-              total +
-              item.bytes.transcript +
-              item.bytes.runtime +
-              item.bytes.artifacts +
-              (item.bytes.context ?? 0),
-            0,
-          );
+          estimated = await this.#retirement.estimateRetentionBytes(id);
         } catch {
           /* Optional estimate remains unknown. */
         }
@@ -225,20 +221,10 @@ export class HostStorageRetentionCoordinator {
     return { count, eligibleAt: enabledAt + policy.days * RETENTION_DAY_MS };
   }
   async #save(): Promise<void> {
-    const temporary = `${this.#path}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(
-        temporary,
-        JSON.stringify({
-          latestTime: this.#latestTime,
-          lastSweep: this.#lastSweep,
-          lastDeletion: this.#lastDeletion,
-        }) + '\n',
-        { flag: 'wx', mode: 0o600 },
-      );
-      await rename(temporary, this.#path);
-    } finally {
-      await rm(temporary, { force: true });
-    }
+    await writeRetentionDocument(this.#path, {
+      latestTime: this.#latestTime,
+      lastSweep: this.#lastSweep,
+      lastDeletion: this.#lastDeletion,
+    });
   }
 }

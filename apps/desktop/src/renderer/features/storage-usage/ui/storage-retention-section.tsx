@@ -41,7 +41,7 @@ export function StorageRetentionSection() {
     return () => { generation.current++; };
   }, [host, hostKey, services, attempt]);
   if (!host || !services?.loadRetention || !services.setRetention) return null;
-  const result = snapshot?.key === hostKey ? snapshot.result : undefined;
+  const result = snapshot && snapshot.key === hostKey ? snapshot.result : undefined;
   const disabled = !result || saving || failed;
   async function save(enabled: boolean, days: RetentionDays) {
     if (!host || !result || !services?.setRetention) return;
@@ -56,7 +56,7 @@ export function StorageRetentionSection() {
     finally { if (generation.current === current) setSaving(false); }
   }
   const date = (time: number) => new Date(time).toLocaleString(locale);
-  return <SettingsSection title={copy.title} description={copy.help} action={<Button size="sm" variant="ghost" isDisabled={saving} onClick={() => setAttempt(value => value + 1)}>{copy.refresh}</Button>}>
+  return <SettingsSection title={copy.title} description={copy.help} action={<Button size="sm" variant="ghost" isDisabled={saving} label={copy.refresh} onClick={() => setAttempt(value => value + 1)} />}>
     <SettingsRow label={copy.enabled} end={<Switch label={copy.enabled} isLabelHidden value={result?.policy.enabled ?? false} isDisabled={disabled} onChange={enabled => void save(enabled, result?.policy.days ?? 30)} />} />
     <SettingsRow label={copy.days} end={<Selector label={copy.days} isLabelHidden value={String(result?.policy.days ?? 30)} options={RETENTION_DAYS.map(days => ({ value: String(days), label: copy.dayOption(days) }))} isDisabled={disabled} onChange={days => void save(result?.policy.enabled ?? false, Number(days) as RetentionDays)} />} />
     <SettingsRow label={failed ? copy.failed : !result ? copy.loading : result.preview.eligibleAt === null ? copy.disabled : copy.preview(result.preview.count, date(result.preview.eligibleAt))} />
