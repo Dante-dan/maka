@@ -17,23 +17,15 @@
  * under the License.
  */
 
-import { strict as assert } from 'node:assert';
-import { describe, it } from 'node:test';
+import type { ReactNode } from 'react';
+import type { TaskEntryHostRef } from '../ports.js';
+import { useProjectRegistration, type ProjectRegistration } from '../controller/use-project-registration.js';
 
-import { __TEST__ } from '../telegram-bridge.js';
-
-const { isAllowedUser } = __TEST__;
-
-describe('isAllowedUser', () => {
-  it('defaults open and otherwise requires an exact user-id match', () => {
-    const cases: Array<[string[] | undefined, string, boolean]> = [
-      [undefined, '12345', true],
-      [[], '12345', true],
-      [['12345', '67890'], '67890', true],
-      [['1234567890'], '123', false],
-    ];
-    for (const [allowlist, userId, expected] of cases) {
-      assert.equal(isAllowedUser(allowlist, userId), expected, `${allowlist}:${userId}`);
-    }
-  });
-});
+/** Adapts registration to legacy callers without adding hooks to their lifecycle. */
+export function ProjectRegistrationBoundary(props: {
+  host?: TaskEntryHostRef;
+  children(registration: ProjectRegistration): ReactNode;
+}) {
+  const registration = useProjectRegistration(props.host);
+  return props.children(registration);
+}
