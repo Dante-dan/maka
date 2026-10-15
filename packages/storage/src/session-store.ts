@@ -54,6 +54,7 @@ import {
   type ArchiveRetentionCandidateCount,
   type ArchiveRetentionCandidateQuery,
   type ArchiveRetentionCandidateRow,
+  isSessionNotFoundError,
 } from './session-store-contract.js';
 export {
   isSafeSessionId,
@@ -202,6 +203,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
     externalOrigin: SessionExternalOrigin,
     options: {
       readonly onCommitStarted?: () => void;
+      readonly discardPreparedMessages?: (sessionId: string) => Promise<void>;
       readonly prepareMessages?: (
         sessionId: string,
         messages: readonly StoredMessage[],
@@ -218,19 +220,40 @@ class SqliteSessionStore implements SessionAuthorityStore {
       externalOrigin,
       transcriptLedgerVersion: 0,
     };
-    const preparedMessages = options.prepareMessages
-      ? await options.prepareMessages(header.id, messages)
-      : messages;
-    const canonicalMessages = preparedMessages.map((message) =>
-      decodeCanonicalMessage(JSON.parse(JSON.stringify(message)) as unknown),
-    );
-    const catalogProjection = projectSessionCatalogMessages(canonicalMessages);
-    options.onCommitStarted?.();
-    const outcome = await this.metadata.importSession(header, canonicalMessages, catalogProjection);
-    if (outcome !== 'imported') {
-      throw new Error(`Generated Session id already exists: ${header.id}`);
+    let commitStarted = false;
+    try {
+      const preparedMessages = options.prepareMessages
+        ? await options.prepareMessages(header.id, messages)
+        : messages;
+      const canonicalMessages = preparedMessages.map((message) =>
+        decodeCanonicalMessage(JSON.parse(JSON.stringify(message)) as unknown),
+      );
+      const catalogProjection = projectSessionCatalogMessages(canonicalMessages);
+      options.onCommitStarted?.();
+      commitStarted = true;
+      const outcome = await this.metadata.importSession(
+        header,
+        canonicalMessages,
+        catalogProjection,
+      );
+      if (outcome !== 'imported') {
+        throw new Error(`Generated Session id already exists: ${header.id}`);
+      }
+      return (await this.metadata.read(header.id)).header;
+    } catch (error) {
+      let uncommitted = !commitStarted;
+      if (commitStarted) {
+        try {
+          await this.metadata.read(header.id);
+        } catch (readError) {
+          // An uncertain commit must retain its bytes for recovery. Only an
+          // authoritative absence makes the prepared artifacts safe to discard.
+          uncommitted = isSessionNotFoundError(readError);
+        }
+      }
+      if (uncommitted) await options.discardPreparedMessages?.(header.id);
+      throw error;
     }
-    return (await this.metadata.read(header.id)).header;
   }
 
   async lookupExternalSessionImports(
