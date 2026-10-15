@@ -463,7 +463,14 @@ export interface SessionAuthorityStore extends SessionStore, MessageAdmissionSto
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
     externalOrigin: SessionExternalOrigin,
-    options?: { readonly onCommitStarted?: () => void },
+    options?: {
+      readonly onCommitStarted?: () => void;
+      /** Prepare Session-owned attachment references before any transcript publication. */
+      readonly prepareMessages?: (
+        sessionId: string,
+        messages: readonly StoredMessage[],
+      ) => Promise<readonly StoredMessage[]>;
+    },
   ): Promise<SessionHeader>;
   /** Look up live published imports for a bounded page of source Sessions. */
   lookupExternalSessionImports(
