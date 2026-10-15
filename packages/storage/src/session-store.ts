@@ -251,7 +251,13 @@ class SqliteSessionStore implements SessionAuthorityStore {
           uncommitted = isSessionNotFoundError(readError);
         }
       }
-      if (uncommitted) await options.discardPreparedMessages?.(header.id);
+      if (uncommitted) {
+        try {
+          await options.discardPreparedMessages?.(header.id);
+        } catch {
+          // Best-effort cleanup must not replace the original import failure.
+        }
+      }
       throw error;
     }
   }
