@@ -30,7 +30,6 @@ import type { AttachmentRef } from '@maka/core/events';
 import type { StoredMessage } from '@maka/core/session';
 import type { ExternalMakaSession } from '@maka/core/external-session';
 import type { ArtifactAuthorityStore } from './artifact-store.js';
-import { sanitizeArtifactName } from './artifact-store.js';
 
 // Bound disk growth and I/O independently of the transcript's text budget.
 const MAX_IMPORT_IMAGE_BYTES = 256 * 1024 * 1024;
@@ -62,7 +61,11 @@ export async function prepareExternalSessionImages(
       const attachments: AttachmentRef[] = [...(message.attachments ?? [])];
       const unavailable: number[] = [];
       for (const [index, path] of paths.entries()) {
-        if (!artifacts || attachments.length >= MAX_ATTACHMENT_COUNT) {
+        if (
+          !artifacts ||
+          index >= MAX_ATTACHMENT_COUNT ||
+          attachments.length >= MAX_ATTACHMENT_COUNT
+        ) {
           unavailable.push(index + 1);
           continue;
         }
@@ -77,7 +80,7 @@ export async function prepareExternalSessionImages(
           sessionId,
           // Match native uploads: the artifact owns an upload key, not a source Turn id.
           turnId: id,
-          name: sanitizeArtifactName(basename(path)),
+          name: basename(path),
           kind: 'image',
           content: image.bytes,
           mimeType: image.mimeType,

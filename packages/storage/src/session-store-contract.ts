@@ -465,6 +465,8 @@ export interface SessionAuthorityStore extends SessionStore, MessageAdmissionSto
     externalOrigin: SessionExternalOrigin,
     options?: {
       readonly onCommitStarted?: () => void;
+      /** Discard prepared bytes only when no Session was committed. */
+      readonly discardPreparedMessages?: (sessionId: string) => Promise<void>;
       /** Prepare Session-owned attachment references before any transcript publication. */
       readonly prepareMessages?: (
         sessionId: string,

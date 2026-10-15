@@ -105,11 +105,19 @@ describe('ExternalSessionImporter', () => {
     }
   });
 
-  test('keeps the conversation and explicitly reports missing, invalid and oversized images', async () => {
+  test('bounds attempts even for missing images and reports unavailable originals', async () => {
     const root = await mkdtemp(join(tmpdir(), 'maka-import-missing-images-'));
     const invalid = join(root, 'invalid.png');
     const large = join(root, 'large.png');
     await writeFile(invalid, 'not an image');
+    const beyondAttemptLimit = join(root, 'ninth.png');
+    await writeFile(
+      beyondAttemptLimit,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==',
+        'base64',
+      ),
+    );
     const { open } = await import('node:fs/promises');
     const handle = await open(large, 'w');
     await handle.truncate(MAX_ATTACHMENT_BYTES + 1);
@@ -120,7 +128,13 @@ describe('ExternalSessionImporter', () => {
       const adapter = fakeAdapter({
         metadata: { name: 'Missing images', cwd: root },
         messages: [message()],
-        sourceImages: [join(root, 'missing.png'), invalid, large].map((path) => ({
+        sourceImages: [
+          join(root, 'missing.png'),
+          invalid,
+          large,
+          ...Array.from({ length: 5 }, (_, index) => join(root, `missing-${index}.png`)),
+          beyondAttemptLimit,
+        ].map((path) => ({
           messageId: 'user-1',
           path,
         })),
@@ -134,7 +148,7 @@ describe('ExternalSessionImporter', () => {
       assert.equal(user?.type, 'user');
       if (user?.type !== 'user') throw new Error('Missing user');
       assert.match(user.text, /^hello/);
-      assert.match(user.text, /3 imported image attachment\(s\) unavailable/);
+      assert.match(user.text, /9 imported image attachment\(s\) unavailable/);
       assert.equal(user.attachments, undefined);
       assert.equal((await authority.store.listPage(header.id, { offset: 0, limit: 10 })).total, 0);
     } finally {

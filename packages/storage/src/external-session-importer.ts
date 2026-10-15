@@ -93,6 +93,9 @@ export class ExternalSessionImporter {
       },
       external.sourceImages?.length
         ? {
+            discardPreparedMessages: async (sessionId) => {
+              await this.artifacts?.purgeSessionArtifacts(sessionId);
+            },
             prepareMessages: (sessionId, sourceMessages) =>
               prepareExternalSessionImages(
                 sessionId,

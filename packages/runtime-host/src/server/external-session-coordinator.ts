@@ -32,7 +32,6 @@ import type { CreateSessionInput } from '@maka/core/runtime-inputs';
 import type { SessionExternalOrigin, SessionHeader, StoredMessage } from '@maka/core/session';
 import type { ExternalSessionImportLookupResult } from '@maka/storage/execution-stores';
 import type { SessionCatalogRecord } from '@maka/storage/execution-stores';
-import type { SessionAuthorityStore } from '@maka/storage/session-store';
 import {
   ExternalSessionImporter,
   type ExternalSessionImportTarget,
@@ -65,7 +64,14 @@ type ExternalSessionStore = {
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
     externalOrigin: SessionExternalOrigin,
-    options?: Parameters<SessionAuthorityStore['createImportedSession']>[3],
+    options?: {
+      readonly onCommitStarted?: () => void;
+      readonly prepareMessages?: (
+        sessionId: string,
+        messages: readonly StoredMessage[],
+      ) => Promise<readonly StoredMessage[]>;
+      readonly discardPreparedMessages?: (sessionId: string) => Promise<void>;
+    },
   ): Promise<SessionHeader>;
   lookupExternalSessionImports(
     adapterId: string,

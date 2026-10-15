@@ -599,17 +599,30 @@ describe('SQLite SessionStore', () => {
     const root = await mkdtemp(join(tmpdir(), 'maka-session-import-commit-boundary-'));
     const store = createSessionStore(root);
     let commitStarted = false;
+    let preparedId: string | undefined;
+    let discardedId: string | undefined;
     try {
       await assert.rejects(
         store.createImportedSession(
           makeInput(),
           [{ type: 'user' } as unknown as StoredMessage],
           { adapterId: 'fake', sourceSessionId: 'source-1' },
-          { onCommitStarted: () => (commitStarted = true) },
+          {
+            onCommitStarted: () => (commitStarted = true),
+            prepareMessages: async (sessionId, messages) => {
+              preparedId = sessionId;
+              return messages;
+            },
+            discardPreparedMessages: async (sessionId) => {
+              discardedId = sessionId;
+            },
+          },
         ),
         /Invalid stored message schema/,
       );
       assert.equal(commitStarted, false);
+      assert.ok(preparedId);
+      assert.equal(discardedId, preparedId);
       assert.deepEqual(await store.listHeaders(), []);
     } finally {
       await store.close?.();
