@@ -200,21 +200,30 @@ class SqliteSessionStore implements SessionAuthorityStore {
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
     externalOrigin: SessionExternalOrigin,
-    options: { readonly onCommitStarted?: () => void } = {},
+    options: {
+      readonly onCommitStarted?: () => void;
+      readonly prepareMessages?: (
+        sessionId: string,
+        messages: readonly StoredMessage[],
+      ) => Promise<readonly StoredMessage[]>;
+    } = {},
   ): Promise<SessionHeader> {
     await this.ensureReady();
     assertNoConversationCopyMetadata(input);
     if (input.subagentSpawn) {
       throw new Error('Subagent spawn metadata requires createSubagent()');
     }
-    const canonicalMessages = messages.map((message) =>
-      decodeCanonicalMessage(JSON.parse(JSON.stringify(message)) as unknown),
-    );
     const header: SessionHeader = {
       ...buildSessionHeader(this.workspaceRoot, input),
       externalOrigin,
       transcriptLedgerVersion: 0,
     };
+    const preparedMessages = options.prepareMessages
+      ? await options.prepareMessages(header.id, messages)
+      : messages;
+    const canonicalMessages = preparedMessages.map((message) =>
+      decodeCanonicalMessage(JSON.parse(JSON.stringify(message)) as unknown),
+    );
     const catalogProjection = projectSessionCatalogMessages(canonicalMessages);
     options.onCommitStarted?.();
     const outcome = await this.metadata.importSession(header, canonicalMessages, catalogProjection);
