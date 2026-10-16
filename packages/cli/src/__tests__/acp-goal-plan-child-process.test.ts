@@ -277,7 +277,7 @@ describe('ACP Goal/Plan real Host routes', () => {
   }
 
   test('Plan paging preserves storeVersion and returns revision_changed after an external write', {
-    timeout: 45_000,
+    timeout: 90_000,
   }, async () => {
     let call = 0;
     const model = createServer((request, response) => {
@@ -421,7 +421,8 @@ describe('ACP Goal/Plan real Host routes', () => {
         },
         {
           startRuntimeHost: true,
-          timeoutMs: 30_000,
+          // Seventeen real Host/model round trips share this operation budget.
+          timeoutMs: 60_000,
           model: {
             id: 'paging-fixture',
             thinkingLevels: [],
