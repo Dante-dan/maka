@@ -377,6 +377,7 @@ export function ChatView(props: {
     locale,
     messages: visibleMessages,
     liveTurns: visibleLiveTurns,
+    activeTurnId: props.hasLaterHistory ? undefined : props.activeTurn?.turnId,
     shellRunUpdates: props.shellRunUpdates,
   });
   // Derived FROM the projected turns, not beside them: the consumer keys its
