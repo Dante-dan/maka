@@ -82,6 +82,15 @@ import { shouldResolveHostTavilyWebSearchReadiness } from './web-search-tool.js'
 
 const INTERACTIVE_RUN_COMPOSER_ID = 'maka.interactive';
 const INTERACTIVE_RUN_COMPOSER_REVISION = '1';
+const AGENT_COLLABORATION_TOOLS = new Set([
+  'agent_spawn',
+  'agent_list',
+  'agent_output',
+  'agent_swarm_status',
+  'view_agent_graph',
+  'update_agent_graph',
+  'yield_agent_graph',
+]);
 import { createWorkHubTopicGate } from './workhub-topic-gate.js';
 
 const CHILD_INSTRUCTION_BOUNDARY = [
@@ -211,9 +220,13 @@ export function createInteractiveRunComposer(input: InteractiveRunComposerInput)
     // capabilities must be included by the authority that constructs that
     // list. The ceiling is also an exact wire contract: no deferred search
     // groups inside it, so the bound tools stay fully visible.
-    const resolved = topicGate
-      ? selectedTools.map((tool) => topicGate.wrap(tool))
-      : [...selectedTools];
+    const permitted =
+      input.runtimePolicy.policy.subagents.enabled === false
+        ? selectedTools.filter(
+            (tool) => tool.categoryHint !== 'subagent' && !AGENT_COLLABORATION_TOOLS.has(tool.name),
+          )
+        : [...selectedTools];
+    const resolved = topicGate ? permitted.map((tool) => topicGate.wrap(tool)) : permitted;
     assertUniqueToolNames(resolved);
     return Object.freeze(resolved);
   };
@@ -359,6 +372,7 @@ export interface InteractiveRunComposerFactoryInput
   > {
   readonly clientCapabilities: HostClientCapabilityCoordinator;
   readonly resolveTavilyWebSearchReadiness: () => Promise<boolean>;
+  readonly resolveToolCeiling?: (sessionId: string) => readonly MakaTool[] | undefined;
   readonly resolveRootTools?: (sessionId: string) => Promise<readonly MakaTool[]>;
   readonly resolvePluginTools?: (
     sessionId: string,
@@ -465,6 +479,7 @@ export function createInteractiveRunComposerFactory(
             backendContext.abortSignal,
           )
         : false;
+      const nativeCeiling = input.resolveToolCeiling?.(backendContext.sessionId);
       const candidateHostTools = [...(input.hostTools ?? []), ...rootTools];
       const toolSurface = routeInteractiveRunToolSurface({
         runtimePolicy,
@@ -489,8 +504,8 @@ export function createInteractiveRunComposerFactory(
         ...(isSideConversationSession(backendContext.header.labels)
           ? { sideConversation: true }
           : {}),
-        ...(boundTools ? { boundTools } : {}),
-        ...(!boundTools && backendContext.header.toolProfile
+        ...((nativeCeiling ?? boundTools) ? { boundTools: nativeCeiling ?? boundTools } : {}),
+        ...(!nativeCeiling && !boundTools && backendContext.header.toolProfile
           ? { toolProfile: backendContext.header.toolProfile }
           : {}),
         ...(clientCapabilities ? { clientCapabilities } : {}),

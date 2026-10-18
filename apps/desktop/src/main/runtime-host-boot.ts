@@ -29,7 +29,6 @@ import {
   nativeTheme,
   powerMonitor,
   powerSaveBlocker,
-  protocol,
   shell,
   Tray,
 } from "electron";
@@ -143,6 +142,7 @@ import {
   defaultRuntimeHostRecoveryDialog,
 } from "./native-diagnostic-dialog.js";
 import {
+  projectlessTaskWorkspace,
   resolveDesktopSessionWorkspace,
 } from "./new-session-project.js";
 import { createMcpExclusiveLane, registerMcpIpcMain } from "./mcp-ipc-main.js";
@@ -172,6 +172,7 @@ import {
   createProjectRootController,
   type ProjectRootController,
 } from "./project-root-controller.js";
+import { createManagedTaskDirectoryAuthority } from "./managed-task-directory.js";
 import { createSessionCopyCleanupAuthority } from "@maka/storage/session-copy-cleanup";
 import {
   projectHostConnections,
@@ -244,8 +245,7 @@ import { RuntimeHostOAuthPresentation } from "./runtime-host-oauth-presentation.
 import { registerRuntimeHostPermissionsIpc } from "./runtime-host-permissions-ipc-main.js";
 import { registerRuntimeHostRendererIpc } from "./runtime-host-renderer-ipc-main.js";
 import {
-  ClientPluginTransport,
-  MAKA_CLIENT_PLUGIN_SCHEME,
+  clientPluginTransport,
   registerClientPluginIpc,
 } from './client-plugin-transport.js';
 import { registerRuntimeHostRecallIpc } from "./runtime-host-recall-ipc-main.js";
@@ -264,6 +264,7 @@ import {
   type SettingsBotsIpcHandle,
 } from "./settings-bots-ipc-main.js";
 import {
+  hasIsolatedE2eProfile,
   isComputerUseRealModelE2e,
   isE2e,
   isIsolatedE2e,
@@ -281,8 +282,6 @@ bootContext.prepareToQuit = prepareRuntimeHostDesktopQuit;
 bootContext.cleanup = closeRuntimeHostDesktop;
 bootContext.activeRuntimeHostRef = activeRuntimeHostRef;
 bootContext.resolveRuntimeHostDiagnostics = resolveRuntimeHostDiagnostics;
-const clientPluginTransport = new ClientPluginTransport();
-protocol.handle(MAKA_CLIENT_PLUGIN_SCHEME, (request) => clientPluginTransport.serve(request.url));
 const runtimeHostPeerConfiguration = await configureDesktopRuntimeHostPeerClient({
   isPackaged: app.isPackaged,
   enableDevelopmentPeer: process.argv.includes('--runtime-host-peer'),
@@ -442,6 +441,29 @@ mainWindowDelegates.onMainWindowClose = () => {
   native.computerUsePip.destroyAll();
 };
 const attachmentApprovals = createAttachmentApprovalRegistry();
+/**
+ * Dedicated task directories live in the user-owned `~/Maka/tasks` root —
+ * deliberately separate from `userData` (settings, credentials, session
+ * state) and from the install location. Source launches are `Maka Dev`, so
+ * development tasks land in `~/Maka Dev/tasks`; `getAppPath()` staying in
+ * `reservedRoots` also means a projectless cwd inside the source tree reads
+ * as `suspicious`, which is intended — the app must not nest task state in
+ * its own checkout. Isolated e2e profiles redirect both `userData` and the
+ * fake home into one sandbox, so the root moves under the isolated
+ * workspace instead — `~` there resolves inside `userData` itself and would
+ * trip the reserved-location guard; inside the sandbox the Client-data
+ * reserved roots no longer apply.
+ */
+const managedTaskDirectories = createManagedTaskDirectoryAuthority({
+  root:
+    e2eFixture || hasIsolatedE2eProfile
+      ? join(workspaceRoot, 'task-directories')
+      : join(app.getPath('home'), app.getName(), 'tasks'),
+  reservedRoots:
+    e2eFixture || hasIsolatedE2eProfile
+      ? [app.getAppPath()]
+      : [userDataDir, workspaceRoot, app.getAppPath()],
+});
 const sessionLocalStore = new DesktopSessionLocalStore(join(userDataDir, 'session-experience.sqlite'));
 const localSessionChanged = createSessionLocalChangedEmitter({
   send: (channel, scope, payload) => mainWindowController.send(channel, scope, payload),
@@ -464,6 +486,7 @@ registerDesktopSessionLocalIpc({
     if (!context?.isActive()) throw new Error('Select a cached project before creating an offline task');
     return resolveDesktopSessionWorkspace(input, context.projectManagement, context.projectCatalog, {
       allowHostPath: !runtimeHostProfileUsesHostWorkspace(context.policy.kind),
+      allocateDedicatedDirectory: () => managedTaskDirectories.allocate(),
     });
   },
 });
@@ -736,7 +759,7 @@ const currentDesktopWorkspaceTarget = async (
   if (!workspace) {
     throw new Error("Select a project from the Runtime Host first");
   }
-  return workspace;
+  return projectlessTaskWorkspace(workspace, () => managedTaskDirectories.allocate());
 };
 const requireWorkHubTarget = (scope: DesktopTargetScope): DesktopRuntimeHostTargetContext => {
   const target = runtimePolicyTargetsByEpoch.get(scope.targetEpoch);
@@ -1159,16 +1182,27 @@ const createLocalRuntimeHostManager = () => createRuntimeHostDesktopManager(
             : {}),
         },
         currentTarget.projectCatalog,
-        { allowHostPath: !runtimeHostProfileUsesHostWorkspace(target.kind) },
+        {
+          allowHostPath: !runtimeHostProfileUsesHostWorkspace(target.kind),
+          allocateDedicatedDirectory: () => managedTaskDirectories.allocate(),
+        },
       );
     },
+    taskDirectories: managedTaskDirectories,
     resolveExternalSessionImportWorkspace: (target) =>
       currentDesktopWorkspaceTarget(target),
     emitSessionsChanged,
     cacheTranscript: (scope, snapshot) => sessionLocal.cacheTranscript(scope, snapshot),
     ...(e2eFixture?.scenario === "chat-partial-history"
-      ? { transcriptHistoryBytes: PARTIAL_HISTORY_TRANSCRIPT_BYTES }
+      ? {
+          transcriptHistoryBytes: PARTIAL_HISTORY_TRANSCRIPT_BYTES,
+          transcriptInitialHistoryBytes: PARTIAL_HISTORY_TRANSCRIPT_BYTES,
+        }
       : {}),
+    retireCancelledMessages: (scope, sessionId, messageIds) =>
+      sessionLocal.retireCancelledMessages(scope, sessionId, messageIds),
+    failNotAdmittedMessages: (scope, sessionId, messageIds) =>
+      sessionLocal.failNotAdmittedMessages(scope, sessionId, messageIds),
     completeDesktopInteractionTurn,
     notifyRun,
     createSessionCopyCleanup: ({ removeSession, resumeSessionCopy }) =>
@@ -1575,6 +1609,13 @@ function registerHostClientIpc(
   const unsubscribeSessionCatalogChanges = client.subscribeSessionCatalogChanges(
     ({ sessionId }) => emitTargetSessionsChanged("updated", sessionId),
   );
+  const unsubscribeArtifactChanges = client.subscribeArtifactChanges((frame) => {
+    if (frame.reason === 'deleted') {
+      void managedArtifactPreview.revoke(scope.targetEpoch, frame.sessionId, frame.artifactId);
+    } else {
+      void managedArtifactPreview.releaseSession(scope.targetEpoch, frame.sessionId);
+    }
+  });
   const unsubscribeProjectCatalogChanges = client.subscribeProjectCatalogChanges(() => {
     sendToRenderer("projects:changed");
   });
@@ -1713,14 +1754,17 @@ function registerHostClientIpc(
       if (typeof projectId === "string") {
         return { kind: "project", projectId };
       }
+      // A projectless new task runs in a fresh dedicated directory under the
+      // managed root, not the implicit fallback the selection carries.
+      // Preview its skills against that root — never allocate on a read.
       if (projectId === null) {
         if (usesHostWorkspace) return undefined;
-        return {
-          kind: "host_path",
-          path: (await requireRuntimePolicyTarget(target).projectManagement.current()).path,
-        };
+        return { kind: "host_path", path: await managedTaskDirectories.prepareRoot() };
       }
-      return selectedDesktopWorkspaceTarget(target);
+      const workspace = await selectedDesktopWorkspaceTarget(target);
+      return workspace?.kind === 'host_path'
+        ? { kind: 'host_path', path: await managedTaskDirectories.prepareRoot() }
+        : workspace;
     },
     getDefaultPermissionMode: () =>
       resolveDefaultPermissionMode(() => runtimeHostSettings.get()),
@@ -1759,6 +1803,15 @@ function registerHostClientIpc(
       e2eFixture,
       projectManagement: targetProjectManagement,
       allowLocalProjectPaths: !usesHostWorkspace,
+      getSessionTaskDirectoryBinding: usesHostWorkspace
+        ? undefined
+        : async (sessionId) => {
+            const session = await client.getSession(sessionId);
+            if (!session || session.workspace.target.kind !== 'host_path') {
+              return undefined;
+            }
+            return managedTaskDirectories.classify(session.workspace.hostCwd);
+          },
     },
     scopedIpc,
   );
@@ -1847,12 +1900,14 @@ function registerHostClientIpc(
   });
   registerOnboardingIpc({ onboardingService, ipcMain: scopedIpc });
   registerTaskSubmissionReadinessIpc(taskSubmissionReadinessService, scopedIpc);
+  managedArtifactPreview.openScope(scope.targetEpoch);
   return async () => {
     clientPluginTransport.release(client);
     unsubscribeConfigurationChanges();
     await managedArtifactPreview.closeScope(scope.targetEpoch);
     unsubscribeConnectionCatalogChanges();
     unsubscribeSessionCatalogChanges();
+    unsubscribeArtifactChanges();
     unsubscribeProjectCatalogChanges();
     unsubscribeScheduledTaskChanges();
     runtimePolicyTargets.delete(target);
@@ -2053,7 +2108,7 @@ function emitSessionsChanged(
 ): void {
   sessionLocal.changed(scope);
   if (reason === 'deleted' && sessionId) {
-    try { sessionLocalStore.removeSession(sessionLocal.target(scope).partition, sessionId); } catch { /* A retired target cannot repopulate its cache. */ }
+    try { sessionLocal.removeSession(sessionLocal.target(scope), sessionId); } catch { /* A retired target cannot repopulate its cache. */ }
   }
   const event: SessionChangedEvent = {
     reason,

@@ -167,12 +167,11 @@ import {
   shouldAppendContextCompactedNote,
   shouldAppendContextCompactionFailedOpenNote,
 } from './context-budget.js';
-import { isHistoryCompactContentEvent } from './history-compaction.js';
 import {
   canContinueHistoryCompactCheckpointForModel,
-  historyCompactSourceDigest,
+  checkHistoryCompactCheckpointCurrency,
+  isHistoryCompactContentEvent,
   isProviderHistoryCompactCheckpoint,
-  matchHistoryCompactCheckpointPrefix,
   projectHistoryCompactCheckpointReplay,
   type HistoryCompactCheckpoint,
 } from './history-compact-checkpoint.js';
@@ -1374,33 +1373,26 @@ export class AiSdkTurn {
           let replayEvents = rawProjectionEvents;
           let effectiveProjectionCheckpoint = projectionCheckpoint;
           if (projectionCheckpoint) {
-            const checkpointMatch = matchHistoryCompactCheckpointPrefix(
+            const currency = checkHistoryCompactCheckpointCurrency(
               projectionCheckpoint,
               rawProjectionEvents,
+              pruned.projectionSnapshot,
             );
-            if (checkpointMatch.reason) {
-              throw new Error(`durable checkpoint projection mismatch: ${checkpointMatch.reason}`);
+            if (currency.status === 'raw_mismatch') {
+              throw new Error(`durable checkpoint projection mismatch: ${currency.reason}`);
             }
             // Content-currency guard: the raw identity still matches, but a
             // transition committed after this fold (e.g. an active-turn prune
             // in this very send) changed the effective view the block was
             // built from. Replay without the stale block — the provider
             // decides fit and overflow recovery re-folds (#4845 review).
-            const pinnedEffectiveDigest = projectionCheckpoint.coverage.effectiveSourceDigest;
-            const coveredEffective = await this.deps.compaction.foldEffectiveModelHistory(
-              checkpointMatch.coveredRuntimeEvents,
-              pruned.projectionSnapshot,
-            );
-            if (
-              pinnedEffectiveDigest === undefined ||
-              historyCompactSourceDigest(coveredEffective) !== pinnedEffectiveDigest
-            ) {
+            if (currency.status === 'effective_history_changed') {
               effectiveProjectionCheckpoint = undefined;
             } else {
               replayEvents = projectHistoryCompactCheckpointReplay(
                 projectionCheckpoint,
-                checkpointMatch.coveredRuntimeEvents,
-                checkpointMatch.successorRuntimeEvents,
+                currency.match.coveredRuntimeEvents,
+                currency.match.successorRuntimeEvents,
               );
             }
             // The checkpoint was capacity-validated before it was persisted.
@@ -1499,6 +1491,7 @@ export class AiSdkTurn {
 
         const completedProviderSteps: RequestProjectionContext['completedSteps'][number][] = [];
         let requestMessages: ModelMessage[] = messages;
+        let finishFeedback: string | undefined;
         let result: ModelStreamResult;
         let providerOutcome: ModelStepOutcome;
         let finishReason: ModelFinishReason = 'stop';
@@ -1543,10 +1536,12 @@ export class AiSdkTurn {
           }
           const requestSystemPromptBase = joinPromptFragments([
             systemPrompt,
+            finishFeedback,
             finalChildSummaryStep ? CHILD_STEP_BUDGET_FINALIZATION_PROMPT : undefined,
             toolRuntime.hasSandboxBoundaryDenial() ? SANDBOX_BOUNDARY_DENIED_FOR_TURN : undefined,
             sandboxBoundaryFinalizationStep ? SANDBOX_BOUNDARY_FINALIZATION_PROMPT : undefined,
           ]);
+          finishFeedback = undefined;
           const codeModeCatalogPrompt =
             toolMode === 'code_mode'
               ? renderCodeModeCatalogPrompt(
@@ -2174,6 +2169,7 @@ export class AiSdkTurn {
           finishReason = providerOutcome.finishReason;
           await queue.waitUntilConsumedThroughCurrent();
 
+          let toolRequestedFinish = false;
           if (returnedToolCalls.length > 0) {
             const continuationBudgetRemains = maxSteps === undefined || runtimeSteps < maxSteps;
             if (continuationBudgetRemains && !this.deps.backend.loadTurnRuntimeEvents) {
@@ -2250,6 +2246,14 @@ export class AiSdkTurn {
               if (outcome.status === 'rejected') throw outcome.reason;
               const settlement = outcome.value;
               const toolCall = returnedToolCalls[index];
+              const definition = toolCall && toolsByName.get(toolCall.toolName);
+              if (
+                returnedToolCalls.length === 1 &&
+                definition?.executionSemantics === 'exclusive_step' &&
+                definition.finishTurnOnSuccess &&
+                !settlement.providerError
+              )
+                toolRequestedFinish = true;
               if (isPlanToolResult(settlement.result)) {
                 this.handlePlanToolResult(settlement.result, queue);
               }
@@ -2290,6 +2294,21 @@ export class AiSdkTurn {
             ...(providerStepUsage ? { usage: providerStepUsage } : {}),
           });
           lastCompletedStepHadToolResult = returnedToolCalls.length > 0;
+          // Finish only after the tool result is durably consumed. The Host can
+          // veto completion (for example, new Inbox input raced with Sleep).
+          if (toolRequestedFinish && !this.aborted && !this.loopStopRequested) {
+            const decision = await this.deps.backend.beforeTurnFinish?.({
+              sessionId: this.deps.backend.sessionId,
+              turnId,
+              signal: turnAbortController.signal,
+            });
+            if (!decision || decision.allow) {
+              finishReason = 'stop';
+              this.deps.modelAdapter.clearContinuation(this.turnId);
+              break agentLoop;
+            }
+            finishFeedback = decision.feedback;
+          }
           const stepLimitReached = maxSteps !== undefined && runtimeSteps >= maxSteps;
           if (
             sandboxBoundaryFinalizationStep ||
@@ -2385,6 +2404,33 @@ export class AiSdkTurn {
                 break agentLoop;
               }
               if (this.aborted || this.loopStopRequested) break agentLoop;
+              currentStepMessageId = this.deps.newId();
+              continue agentLoop;
+            }
+          }
+          if (
+            mayTakeAnotherStep &&
+            returnedToolCalls.length === 0 &&
+            this.deps.backend.beforeTurnFinish &&
+            this.deps.backend.loadTurnRuntimeEvents &&
+            this.deps.modelAdapter.mapFinishReason(finishReason) === 'end_turn'
+          ) {
+            const decision = await this.deps.backend.beforeTurnFinish({
+              sessionId: this.deps.backend.sessionId,
+              turnId,
+              signal: turnAbortController.signal,
+            });
+            if (!decision.allow && !this.aborted && !this.loopStopRequested) {
+              if (
+                (await input.handoffBoundary?.(
+                  turnAbortController.signal,
+                  maxSteps === undefined ? null : maxSteps - runtimeSteps,
+                )) === 'pause'
+              ) {
+                this.handoffPaused = true;
+                break agentLoop;
+              }
+              finishFeedback = decision.feedback;
               currentStepMessageId = this.deps.newId();
               continue agentLoop;
             }
