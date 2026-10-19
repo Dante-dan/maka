@@ -182,15 +182,18 @@ async function validateInstalledProduct(root) {
   await smokeRuntimeHostPeerProtocol({ packageRoot, cliEntrypoint, root });
 
   // These flows own separate roots and each proves the packaged Host's idle
-  // retirement. Start both before awaiting so the same grace window is
-  // observed once in wall-clock time rather than twice in series.
+  // retirement. Start them before awaiting so the same grace window is
+  // observed once in wall-clock time rather than repeatedly in series.
   logStep('checking the interactive TUI setup path');
-  const interactiveTui = smokeInteractiveTui({
-    packageRoot,
-    cliEntrypoint,
-    ptySpawn,
-    root: join(root, 'first-run'),
-  });
+  const interactiveTui = [false, true].map((fullscreen) =>
+    smokeInteractiveTui({
+      packageRoot,
+      cliEntrypoint,
+      ptySpawn,
+      root: join(root, fullscreen ? 'first-run-fullscreen' : 'first-run'),
+      fullscreen,
+    }),
+  );
 
   logStep('checking a filesystem-backed controlled model turn');
   const controlledRun = smokeControlledRun({
@@ -198,13 +201,13 @@ async function validateInstalledProduct(root) {
     cliEntrypoint,
     root: join(root, 'controlled-run'),
   });
-  const smokeResults = await Promise.allSettled([interactiveTui, controlledRun]);
+  const smokeResults = await Promise.allSettled([...interactiveTui, controlledRun]);
   const smokeFailures = smokeResults.flatMap((result) =>
     result.status === 'rejected' ? [result.reason] : [],
   );
   if (smokeFailures.length === 1) throw smokeFailures[0];
   if (smokeFailures.length > 1) {
-    throw new AggregateError(smokeFailures, 'Installed CLI product flows both failed');
+    throw new AggregateError(smokeFailures, 'Installed CLI product flows failed');
   }
 
   logStep('checking npx invocation lifetime and durable schedule recovery after cache removal');
@@ -612,7 +615,7 @@ function validateInstalledRuntimeFiles(packageRoot) {
     // Incubator policy: the installed package carries the incubating
     // disclaimer next to LICENSE/NOTICE, like every other Maka release.
     'DISCLAIMER-WIP',
-    'node_modules/@maka/runtime/dist/workers/filesystem-worker.js',
+    'node_modules/@maka/runtime/dist/workers/filesystem-worker.mjs',
     'node_modules/@maka/runtime-host/dist/execution-candidate-main.js',
     'node_modules/@maka/eval/dist/index.js',
     'node_modules/@maka/eval/harbor/relay_agent.py',
@@ -628,7 +631,7 @@ function validateInstalledRuntimeFiles(packageRoot) {
   );
   assertOutput(
     readFileSync(join(packageRoot, 'node_modules/@ai-sdk/provider-utils/dist/index.js'), 'utf8'),
-    'function absentIfBlank',
+    'Ambiguous streamed tool call delta.',
   );
 }
 
@@ -733,12 +736,16 @@ async function smokeNativeFileLock(packageRoot, root) {
   }
 }
 
-async function smokeInteractiveTui({ packageRoot, cliEntrypoint, ptySpawn, root }) {
+async function smokeInteractiveTui({ packageRoot, cliEntrypoint, ptySpawn, root, fullscreen }) {
   mkdirSync(root, { recursive: true });
   const home = join(root, 'home');
   const workspace = join(root, 'workspace');
   mkdirSync(workspace, { recursive: true });
   const environment = isolatedEnvironment(home);
+  environment.MAKA_TUI_FULLSCREEN = fullscreen ? '1' : '0';
+  for (const key of ['DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
+    delete environment[key];
+  }
   const dataRoots = await resolveInstalledDataRoots(packageRoot, environment, home);
   await withCleanup(
     async () => {
@@ -760,7 +767,9 @@ async function smokeInteractiveTui({ packageRoot, cliEntrypoint, ptySpawn, root 
         },
         timeoutMs: PROCESS_TIMEOUT_MS,
       });
-      if (result.exitCode !== 0) throw new Error(`Interactive TUI exited with ${result.exitCode}`);
+      if (result.exitCode !== 0) {
+        throw new Error(`Interactive TUI exited with ${result.exitCode}: ${result.output}`);
+      }
     },
     (completed) => settleRuntimeHost(packageRoot, dataRoots.workspaceRoot, completed),
   );
@@ -844,6 +853,9 @@ async function smokeNpxScheduleRecovery({ packageRoot, cliEntrypoint, ptySpawn, 
   // or a symlink that resolves back to the persistent installation.
   cpSync(packageRoot, temporaryPackage, { recursive: true, dereference: true });
   const environment = { ...isolatedEnvironment(home), npm_config_cache: cache };
+  for (const key of ['DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
+    delete environment[key];
+  }
   const dataRoots = await resolveInstalledDataRoots(packageRoot, environment, home);
   const installation = await importInstalled(packageRoot, 'dist/runtime-host-cli-installation.js');
   if (
@@ -905,12 +917,13 @@ async function smokeNpxScheduleRecovery({ packageRoot, cliEntrypoint, ptySpawn, 
       args: [entrypoint],
       cwd: workspace,
       environment,
-      marker: '/setup',
+      marker: 'Set Up Provider',
       onMarker: async (terminal) => {
         await prepare();
         await observer.close();
         observer = undefined;
-        terminal.write('/exit\r');
+        terminal.write('\x03');
+        setTimeout(() => terminal.write('\x04'), 250);
       },
       timeoutMs: PROCESS_TIMEOUT_MS,
     });

@@ -26,7 +26,7 @@ import {
   type GoalPendingContinuation,
   type GoalState as DurableGoalState,
 } from '@maka/core/goal';
-import { userFacingText, type StoredMessage } from '@maka/core/session';
+import { type StoredMessage } from '@maka/core/session';
 import {
   GoalContinuationCoordinator,
   type GoalSessionCloseOperation,
@@ -36,9 +36,7 @@ import {
 } from '@maka/runtime/goal-continuation';
 import {
   GoalManager,
-  GOAL_REASON_TEXT_LIMIT,
   TERMINAL_GOAL_STATUSES,
-  truncateGoalText,
   type GoalCheckpoint,
   type GoalControlLease,
   type GoalState,
@@ -71,14 +69,20 @@ import {
 import { waitForHostedExecutionTerminal } from './hosted-execution-wait.js';
 import { SessionAdmissionGate } from './session-admission-gate.js';
 import { goalTurnOutcomeFromHostedExecution } from './goal-execution-coordinator.js';
+import { buildGoalEvaluationContext } from './goal-evaluation-context.js';
+import type { GoalFormAnswer, GoalFormToolReference } from './goal-form-evidence.js';
 
 type GoalStores = Pick<ExecutionStoresWriter<'interactive'>, 'sessionStore' | 'agentRunStore'>;
 
 export interface HostGoalCoordinatorOptions {
   readonly store: InteractiveGoalAuthorityWriter;
   readonly stores: GoalStores;
-  /** The Session transcript as its ledger projects it; the Goal reads its tail. */
-  readonly readSessionMessages: (sessionId: string) => Promise<readonly StoredMessage[]>;
+  /** Evidence from one canonical Session transcript snapshot. */
+  readonly readSessionContext: (sessionId: string) => Promise<{
+    readonly messages: readonly StoredMessage[];
+    readonly formAnswers?: readonly GoalFormAnswer[];
+    readonly unreadFormTools?: readonly GoalFormToolReference[];
+  }>;
   readonly sessionAdmission: SessionAdmissionGate;
   readonly evaluator: GoalEvaluatorResource;
   readonly executions: Pick<HostedExecutionAuthority, 'reconcile' | 'subscribe'>;
@@ -171,11 +175,12 @@ export class HostGoalCoordinator {
       evaluator: options.evaluator,
       getRecentContext: async (sessionId) => {
         const controlLease = this.manager.getControlLease(sessionId);
-        const messages = await options.readSessionMessages(sessionId);
+        const { messages, formAnswers, unreadFormTools } =
+          await options.readSessionContext(sessionId);
         if (controlLease && this.manager.matchesControlLease(sessionId, controlLease)) {
           tokenCache.set(sessionId, tokenCount(messages));
         }
-        return recentContext(messages);
+        return buildGoalEvaluationContext(messages, formAnswers, unreadFormTools);
       },
       getTokenCount: (sessionId) => tokenCache.get(sessionId) ?? 0,
       admitTurn: options.admitTurn,
@@ -745,20 +750,6 @@ export class HostGoalCoordinator {
     retained?.release();
     this.#residencies.delete(goal.sessionId);
   }
-}
-
-function recentContext(messages: readonly StoredMessage[]): string {
-  return messages
-    .filter(
-      (message): message is Extract<StoredMessage, { type: 'user' | 'assistant' }> =>
-        message.type === 'user' || message.type === 'assistant',
-    )
-    .slice(-6)
-    .map((message) => {
-      const text = message.type === 'user' ? userFacingText(message) : message.text;
-      return `[${message.type}]: ${truncateGoalText(text, GOAL_REASON_TEXT_LIMIT)}`;
-    })
-    .join('\n');
 }
 
 function tokenCount(messages: readonly StoredMessage[]): number {

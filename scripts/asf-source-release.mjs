@@ -103,6 +103,7 @@ const textSourceExtensions = new Set([
   '.tsv',
   '.tsx',
   '.txt',
+  '.xml',
   '.yaml',
   '.yml',
 ]);
@@ -618,9 +619,17 @@ function validateNonTextInputs(candidateRoot, identity, entries) {
 
   for (const entry of files) {
     const contents = readEntry(entry);
+    if (contents.subarray(0, 16).equals(Buffer.from('SQLite format 3\u0000'))) {
+      throw new Error(`SQLite database ${entry} must be distributed as a textual SQL fixture`);
+    }
     const compiledFormat = compiledArtifactFormat(contents);
     if (compiledFormat) {
       throw new Error(`Compiled artifact ${entry} has forbidden ${compiledFormat} content`);
+    }
+    for (const match of contents.toString('utf8').matchAll(/\bAGFzbQ[A-Za-z0-9+/]{4,}={0,2}/gu)) {
+      if (compiledArtifactFormat(Buffer.from(match[0], 'base64')) === 'WASM') {
+        throw new Error(`Compiled artifact ${entry} has forbidden Base64 WASM content`);
+      }
     }
     try {
       const text = decoder.decode(contents);
