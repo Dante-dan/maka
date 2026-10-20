@@ -20,8 +20,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { expect, userEvent, waitFor, within } from 'storybook/test';
 import { ChatView } from '@maka/ui';
-import { PersonalAssistantTaskLayout } from '../src/renderer/features/personal-assistant/task-layout.js';
-import { createPersonalAssistantServices, PersonalAssistantServicesProvider } from '../src/renderer/features/personal-assistant/services.js';
+import { createPersonalAssistantServices, PersonalAssistantServicesProvider, PersonalAssistantTaskLayout } from '../src/renderer/features/personal-assistant/index.js';
 
 const meta = {
   title: 'Product/Personal Assistant Tasks',
