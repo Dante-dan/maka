@@ -282,10 +282,18 @@ test('startup guidance retains the original failure and selects the managed targ
   const error = runtimeHostRootRepairError(original, {
     rootId: 'a'.repeat(64),
     rootPath: '/unused',
+    clientDataRoot: '/unused-client',
   });
   assert.ok(error instanceof Error);
   assert.equal(error.cause, original);
   assert.match(error.message, /service repair-root --managed-root-id a{64}/u);
+  assert.doesNotMatch(error.message, /--client-data-root/u);
+  const legacyError = runtimeHostRootRepairError(original, {
+    rootPath: '/legacy root',
+    clientDataRoot: '/custom client',
+  });
+  assert.ok(legacyError instanceof Error);
+  assert.match(legacyError.message, /--root "\/legacy root" --client-data-root "\/custom client"/u);
   const unrelated = new Error('unrelated');
   assert.equal(runtimeHostRootRepairError(unrelated, { rootPath: '/root' }), unrelated);
 });

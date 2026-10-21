@@ -18,7 +18,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deriveMakaDataRoots, resolveMakaDataRoots } from './workspace-root.js';
 import {
@@ -323,6 +323,9 @@ export async function runMakaCli(
         throw runtimeHostRootRepairError(error, {
           ...(command.managedDeployment ? { rootId: command.managedDeployment.rootId } : {}),
           rootPath: serviceRootPath,
+          clientDataRoot: command.managedServiceConfigPath
+            ? dirname(command.managedServiceConfigPath)
+            : dataRoots.clientDataRoot,
         });
       }
     }

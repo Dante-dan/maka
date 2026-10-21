@@ -220,6 +220,7 @@ export async function runManagedRuntimeHostServiceCli(
     const code =
       error instanceof RuntimeHostServiceManagerError ? error.code : 'internal_service_error';
     const failure = runtimeHostRootRepairError(error, {
+      clientDataRoot: options.clientDataRoot,
       ...(options.managedRootId ? { rootId: options.managedRootId } : {}),
       ...(options.rootPath ? { rootPath: options.rootPath } : {}),
     });

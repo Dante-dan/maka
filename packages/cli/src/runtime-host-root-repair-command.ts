@@ -216,7 +216,11 @@ async function confirmRootRepair(
 /** Keep startup fail-closed, but point a local operator to explicit recovery. */
 export function runtimeHostRootRepairError(
   error: unknown,
-  target: { readonly rootId?: string; readonly rootPath?: string },
+  target: {
+    readonly rootId?: string;
+    readonly rootPath?: string;
+    readonly clientDataRoot?: string;
+  },
 ): unknown {
   if (!(error instanceof StorageRootAuthorityError) || error.code !== 'root_identity_collision')
     return error;
@@ -225,8 +229,12 @@ export function runtimeHostRootRepairError(
     : target.rootPath
       ? `--root ${JSON.stringify(target.rootPath)}`
       : '';
+  const clientSelector =
+    !target.rootId && target.clientDataRoot
+      ? ` --client-data-root ${JSON.stringify(target.clientDataRoot)}`
+      : '';
   return new Error(
-    `${error.message}\nTo inspect and explicitly repair this root, run: maka runtime-host service repair-root${selector ? ` ${selector}` : ''}`,
+    `${error.message}\nTo inspect and explicitly repair this root, run: maka runtime-host service repair-root${selector ? ` ${selector}` : ''}${clientSelector}`,
     { cause: error },
   );
 }
