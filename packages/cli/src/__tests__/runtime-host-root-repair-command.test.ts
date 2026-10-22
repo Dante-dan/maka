@@ -31,6 +31,7 @@ import {
 } from '@maka/runtime-host/operator';
 import {
   resolveStorageRoot,
+  resolveExistingStorageRoot,
   StorageRootAuthorityError,
   STORAGE_ROOT_MARKER_FILE,
 } from '@maka/storage/root-authority';
@@ -235,6 +236,23 @@ test('canonical deployment recovery reads a stale root without granting launch a
   const readDeployment = (id: string) =>
     readRuntimeHostManagedDeploymentRecoveryTarget(id, authority);
   assert.deepEqual(await readDeployment(config.root.id), config);
+  await assert.rejects(
+    resolveExistingStorageRoot({
+      path: f.root,
+      kind: 'interactive',
+      expectedRootId: config.root.id,
+    }),
+    (original: unknown) => {
+      assert.ok(original instanceof StorageRootAuthorityError);
+      assert.equal(original.code, 'root_identity_changed');
+      const error = runtimeHostRootRepairError(original, { rootId: config.root.id });
+      assert.ok(error instanceof Error);
+      assert.equal(error.cause, original);
+      assert.ok(error.message.includes(`service repair-root --managed-root-id ${config.root.id}`));
+      return true;
+    },
+  );
+  assert.equal(await readFile(f.markerPath, 'utf8'), f.stale);
   assert.equal(
     await runRuntimeHostRootRepairCli(
       { ...f.options, managedRootId: config.root.id },

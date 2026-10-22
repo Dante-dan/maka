@@ -222,7 +222,10 @@ export function runtimeHostRootRepairError(
     readonly clientDataRoot?: string;
   },
 ): unknown {
-  if (!(error instanceof StorageRootAuthorityError) || error.code !== 'root_identity_collision')
+  if (
+    !(error instanceof StorageRootAuthorityError) ||
+    (error.code !== 'root_identity_collision' && error.code !== 'root_identity_changed')
+  )
     return error;
   const selector = target.rootId
     ? `--managed-root-id ${target.rootId}`
