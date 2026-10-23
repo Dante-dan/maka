@@ -233,7 +233,10 @@ export type PlanHistoryCompactionResult =
       estimatedTokensAfter: number;
     };
 
-export type HistoryCompactionFailReason = 'no_safe_completed_span' | 'summarizer_failed';
+export type HistoryCompactionFailReason =
+  | 'no_safe_completed_span'
+  | 'already_compacted'
+  | 'summarizer_failed';
 
 /**
  * Execute a triggered compaction command by deterministically folding the
@@ -383,6 +386,12 @@ export async function planHistoryCompaction(
       }
     }
     const newlyFoldedRuntimeEvents = successorRuntimeEvents ?? coveredRuntimeEvents;
+    // Successors in the candidate pool may all remain beyond an unsettled tool
+    // call. Check progress against the selected safe prefix, after verifying
+    // effective-content currency, rather than minting the same checkpoint again.
+    if (previousCheckpoint && newlyFoldedRuntimeEvents.length === 0) {
+      return { decision: 'fail_open', reason: 'already_compacted' };
+    }
 
     // The model-visible summary reads the effective (transition-folded) view
     // of the covered span; the raw events keep the coverage identity.
