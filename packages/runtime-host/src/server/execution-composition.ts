@@ -17,6 +17,7 @@
  * under the License.
  */
 
+import { canExecuteExistingConversation } from '@maka/core/executor-catalog';
 import { readMatterRuntimeEvents } from '../assistant/proactive-matters/settlement-context.js';
 import { markAssistantBackgroundSessions } from '../assistant/background-sessions.js';
 import { PersonalAssistantService, ASSISTANT_LEGACY_PACKAGES } from '../assistant/service.js';
@@ -1139,7 +1140,7 @@ export async function createExecutionRuntimeHostComposition(
           ...projected,
           idleOnly: true,
           supportsAttachments: entry?.supportsAttachments ?? false,
-          ...(entry?.readiness === 'ready'
+          ...(canExecuteExistingConversation(entry?.readiness)
             ? {}
             : {
                 unavailableReason:
