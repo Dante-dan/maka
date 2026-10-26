@@ -92,6 +92,11 @@ export class BotStore {
   hasUserMessage(id: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM inbox WHERE id=? AND type='user_message'").get(id);
   }
+  hasUserConversation(): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM inbox WHERE type='user_message' AND source='user' LIMIT 1")
+      .get();
+  }
   head(): number {
     return Number(this.db.prepare('SELECT COALESCE(MAX(seq),0) n FROM inbox').get()!.n);
   }
@@ -237,6 +242,7 @@ export class BotStore {
       text: string;
       discoveryIds?: string[];
     }[],
+    receipt?: { key: string; value: unknown },
   ): string[] {
     return this.transaction(() => {
       const serialize = (items: typeof texts) =>
@@ -293,6 +299,7 @@ export class BotStore {
       });
       if (!old)
         this.db.prepare('INSERT INTO outbox_batches(id,payload) VALUES(?,?)').run(batchId, payload);
+      if (receipt) this.set(receipt.key, receipt.value);
       return ids;
     });
   }
