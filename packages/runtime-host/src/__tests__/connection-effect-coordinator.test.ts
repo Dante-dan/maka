@@ -1528,6 +1528,55 @@ test('beginDrain rejects new effects while close waits for an already accepted e
   });
 });
 
+test('discovery for the default-model chooser leaves all new models unselected until confirmation', async () => {
+  await withFixture(async ({ stores }) => {
+    const a = await createConnection(stores, 0, connectionDraft('default-a', 'openai'));
+    const oldTarget = { connectionId: a.connectionId, modelId: 'gpt-5' };
+    await stores.connectionCatalog.setDefaultTarget({
+      expectedCatalogRevision: 1,
+      target: oldTarget,
+    });
+    const b = await createConnection(stores, 2, {
+      ...connectionDraft('default-b', 'custom'),
+      baseUrl: 'https://relay.example/v1',
+      enabledModelIds: [],
+    });
+    await setConnectionCredential(stores, b, 'test-secret');
+    const coordinator = new HostConnectionEffectCoordinator({
+      stores,
+      activation: new RuntimePolicyActivationGate(),
+      oauthCredentials: new HostOAuthExecutionAuthority(stores),
+      createTransport: () => recordingTransport(() => {}),
+      runModelDiscovery: async () => ({ ok: true, models: [{ id: 'first' }, { id: 'second' }] }),
+    });
+    try {
+      const fetched = await coordinator.handlers['connection.models.fetch'](
+        { connectionId: b.connectionId, preserveSelection: true },
+        context,
+      );
+      assert.equal(fetched.ok, true);
+      const discovered = await stores.connectionCatalog.getSnapshot();
+      assert.deepEqual(
+        discovered.connections[1]?.models.map(({ id }) => id),
+        ['first', 'second'],
+      );
+      assert.deepEqual(discovered.connections[1]?.enabledModelIds, []);
+      assert.deepEqual(discovered.defaultTarget, oldTarget);
+      const chosen = await stores.connectionCatalog.setDefaultTarget({
+        expectedCatalogRevision: discovered.revision,
+        target: { connectionId: b.connectionId, modelId: 'second' },
+        enableModel: true,
+      });
+      assert.equal(chosen.kind, 'committed');
+      const after = await stores.connectionCatalog.getSnapshot();
+      assert.deepEqual(after.connections[1]?.enabledModelIds, ['second']);
+      assert.deepEqual(after.defaultTarget, { connectionId: b.connectionId, modelId: 'second' });
+    } finally {
+      await coordinator.close();
+    }
+  });
+});
+
 test('provider discovery failure preserves the existing catalog and returns no secret', async () => {
   await withFixture(async ({ stores }) => {
     const connection = await createConnection(stores, 0, connectionDraft('discovery', 'openai'));
@@ -1617,7 +1666,7 @@ test('OAuth connection effects resolve the canonical access token instead of sen
         }),
       runModelDiscovery: async (_connection, secret) => {
         receivedDiscoverySecret = secret;
-        return { ok: true, models: [{ id: 'gpt-5.6-terra' }] };
+        return { ok: true, models: [{ id: 'gpt-5.6-terra', codexCompactionHash: '3000' }] };
       },
       runConnectionTest: async (_connection, secret) => {
         receivedTestSecret = secret;
@@ -1635,6 +1684,29 @@ test('OAuth connection effects resolve the canonical access token instead of sen
     );
 
     assert.equal(discovery.ok, true);
+    const catalog = await stores.connectionCatalog.getSnapshot();
+    const fetched = catalog.connections.find(
+      (item) => item.connectionId === connection.connectionId,
+    );
+    assert.ok(fetched?.modelsFetchedAt);
+    const target = await resolveExecutionTarget(
+      {
+        llmConnectionId: connection.connectionId,
+        llmConnectionSlug: connection.slug,
+        model: 'gpt-5',
+      },
+      stores,
+      new HostOAuthExecutionAuthority(stores),
+      () => {
+        throw new Error('not used');
+      },
+    );
+    assert.equal(target.connection.codexCompactionMetadataFetchedAt, fetched.modelsFetchedAt);
+    assert.equal(
+      target.connection.models?.find((model) => model.id === 'gpt-5.6-terra')?.codexCompactionHash,
+      '3000',
+    );
+
     assert.equal(tested.ok, true);
     assert.equal(receivedDiscoverySecret, accessToken);
     assert.equal(receivedTestSecret, accessToken);

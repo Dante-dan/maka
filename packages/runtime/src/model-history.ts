@@ -93,7 +93,6 @@ export type PriorUnknownToolOutcomeProjection =
   | {
       readonly kind: 'projected';
       readonly outcomes: readonly PriorUnknownToolOutcome[];
-      readonly systemNotice: string;
     };
 
 /**
@@ -241,19 +240,10 @@ export function inspectPriorUnknownToolOutcomes(
   }
   if (outcomes.length === 0) return { kind: 'none' };
 
-  const rows = outcomes
-    .slice(0, 64)
-    .map((outcome) => `- ${outcome.toolName} (operation ${outcome.operationId})`);
-  if (outcomes.length > 64) rows.push(`- and ${outcomes.length - 64} more unknown operations`);
-  return {
-    kind: 'projected',
-    outcomes,
-    systemNotice: [
-      'A prior execution was interrupted after these tools were dispatched. No durable tool results were recorded; their side effects may or may not have happened.',
-      'The outcome_unknown tool responses in history are temporary context, not proof of success or failure. Inspect current state before repeating any action.',
-      ...rows,
-    ].join('\n'),
-  };
+  // The unknown is carried only by the request-local tool responses below
+  // (appendPriorUnknownToolResponses): the system prompt stays byte-stable,
+  // so the provider's cached request prefix is never churned per event.
+  return { kind: 'projected', outcomes };
 }
 
 /** Insert request-only tool responses beside their calls so provider history stays well-formed. */
@@ -564,6 +554,7 @@ export type RuntimeEventModelReplayItem =
        * dedupe works on identity, never on text.
        */
       steering?: { eventId: string };
+      runtimeContextName?: string;
       eventId: string;
       ts: number;
     }
@@ -977,7 +968,11 @@ export function buildRuntimeEventModelReplayPlan(
       continue;
     }
 
-    if (event.role === 'system' && !includeSystemEvents) {
+    const runtimeContextName =
+      event.role === 'system' && event.author === 'host' && event.content.kind === 'text'
+        ? event.content.runtimeContextName
+        : undefined;
+    if (event.role === 'system' && !includeSystemEvents && runtimeContextName === undefined) {
       diagnostics.push(
         diagnostic(
           event,
@@ -990,7 +985,7 @@ export function buildRuntimeEventModelReplayPlan(
 
     switch (event.content.kind) {
       case 'text': {
-        const role = modelTextRole(event.role);
+        const role = runtimeContextName !== undefined ? 'user' : modelTextRole(event.role);
         if (!role) {
           diagnostics.push(
             diagnostic(
@@ -1016,6 +1011,7 @@ export function buildRuntimeEventModelReplayPlan(
             ? buildSteeringEnvelope(formatTextWithInlineRefs(event.content))
             : formatTextWithInlineRefs(event.content),
           ...(steeringReplay ? { steering: { eventId: event.id } } : {}),
+          ...(runtimeContextName !== undefined ? { runtimeContextName } : {}),
           ...(event.content.attachments ? { attachments: event.content.attachments } : {}),
           ...(event.content.providerOptions !== undefined
             ? {
@@ -1240,7 +1236,13 @@ export function buildRuntimeEventModelReplayPlan(
             content: item.content,
             providerOptions: steeringProviderOptions(item.steering.eventId),
           }
-        : { role: item.role, content: item.content },
+        : {
+            role: item.role,
+            content: item.content,
+            ...(item.runtimeContextName !== undefined
+              ? { providerOptions: runtimeContextProviderOptions(item.runtimeContextName) }
+              : {}),
+          },
     );
   return {
     items,
@@ -1248,6 +1250,12 @@ export function buildRuntimeEventModelReplayPlan(
     diagnostics,
     hasProviderNativeSemantics: items.some((item) => item.kind !== 'text'),
   };
+}
+
+export function runtimeContextProviderOptions(
+  name: string,
+): NonNullable<ModelMessage['providerOptions']> {
+  return { makaRuntimeContext: { name } };
 }
 
 function modelTextRole(role: RuntimeEventRole): TextModelMessage['role'] | undefined {

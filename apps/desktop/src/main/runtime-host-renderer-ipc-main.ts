@@ -88,8 +88,13 @@ function request(
   value: unknown,
 ): Promise<unknown> {
   switch (operation) {
+    case 'session.event-waits.query':
+      return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
+    case 'session.event-wait.cancel':
+      return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
     case 'context.diagnostics.query':
       return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
+    case 'personal-assistant.call':
     case 'daily-review.mutate':
       return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
     case 'daily-review.query':
@@ -99,6 +104,14 @@ function request(
     case 'scheduled-task.mutate':
       return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
     case 'scheduled-task.query':
+      return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
+    case 'storage.retention.query':
+      return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
+    case 'storage.retention.set':
+      return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
+    case 'storage.usage.query':
+      return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
+    case 'storage.usage.sessions.query':
       return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));
     case 'web-search.execute':
       return client.request(operation, HOST_OPERATION_SPECS[operation].decodeInput(value));

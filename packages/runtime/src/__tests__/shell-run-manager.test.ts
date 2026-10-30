@@ -431,6 +431,40 @@ describe('ShellRunProcessManager', () => {
     });
   }
 
+  test('records the pipe command PID, not the supervisor that owns its process group', async () => {
+    const cwd = await workspace();
+    const rootPidPath = join(cwd, 'root.pid');
+    const manager = await createTestManager();
+    try {
+      const initial = await manager.runBackgroundBash(
+        shellInput({
+          cwd,
+          command: 'report the command process id',
+          argv: [
+            process.execPath,
+            '-e',
+            `require('node:fs').writeFileSync(${JSON.stringify(rootPidPath)}, String(process.pid));
+            setInterval(() => {}, 1000);`,
+          ],
+          timeoutMs: 30_000,
+        }),
+      );
+      assertShellRun(initial);
+      await waitUntil(async () => {
+        try {
+          return (await readFile(rootPidPath, 'utf8')).length > 0;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+          throw error;
+        }
+      });
+      // A model can act on this PID directly, e.g. `kill <pid>`.
+      assert.equal(initial.pid, Number.parseInt(await readFile(rootPidPath, 'utf8'), 10));
+    } finally {
+      await manager.terminateAll().catch(() => undefined);
+    }
+  });
+
   test('hands off a long pipe command without output and publishes monotonic revisions', async () => {
     const updates: ShellRunUpdate[] = [];
     const store = sqliteShellRunStore(await workspace());
@@ -3323,3 +3357,69 @@ function delayPosixProcessDiscovery(context: TestContext): {
     release: () => releaseProcessTable.resolve(),
   };
 }
+
+test('observation listeners are scoped and releasable without owning process cleanup', async () => {
+  const cwd = await workspace();
+  const store = sqliteShellRunStore(cwd);
+  const manager = createManager(store);
+  const signal = new AbortController();
+  const terminal = deferred<void>();
+  let activeHints = 0,
+    closedHints = 0,
+    otherSessionHints = 0,
+    completions = 0;
+  const ref = 'maka://runtime/background-tasks/shell-run-1';
+  const shared = () => activeHints++;
+  const aborted = manager.subscribeChanges('session-1', ref, AbortSignal.abort(), shared);
+  const first = manager.subscribeChanges('session-1', ref, NO_ABORT, shared);
+  const second = manager.subscribeChanges('session-1', ref, signal.signal, shared);
+  aborted.close();
+  first.close();
+  first.close();
+  const closed = manager.subscribeChanges('session-1', ref, NO_ABORT, () => closedHints++);
+  closed.close();
+  const other = manager.subscribeChanges('other', ref, NO_ABORT, () => otherSessionHints++);
+  const throwing = manager.subscribeChanges('session-1', ref, NO_ABORT, () => {
+    throw new Error('consumer failure');
+  });
+  const persisted: Promise<string>[] = [];
+  const observer = manager.subscribeChanges('session-1', ref, NO_ABORT, () => {
+    persisted.push(store.readShellRun('session-1', 'shell-run-1').then((record) => record.status));
+  });
+  try {
+    await manager.runBackgroundBash(
+      shellInput({
+        cwd,
+        command: nodeCommand(
+          'const fs=require("fs");const t=setInterval(()=>{if(fs.existsSync("release"))clearInterval(t)},10)',
+        ),
+        timeoutMs: 10000,
+        onCompletion: () => {
+          completions++;
+          terminal.resolve();
+        },
+      }),
+    );
+    assert.ok(
+      activeHints > 0,
+      'Closing one registration does not remove another with the same callback',
+    );
+    signal.abort();
+    second.close();
+    const hintsAtAbort = activeHints;
+    assert.equal(manager.liveCount(), 1);
+    await writeFile(join(cwd, 'release'), 'ready');
+    await terminal.promise;
+    assert.equal((await store.readShellRun('session-1', 'shell-run-1')).status, 'completed');
+    assert.equal(completions, 1);
+    assert.equal(activeHints, hintsAtAbort);
+    assert.equal(closedHints, 0);
+    assert.equal(otherSessionHints, 0);
+    assert.ok((await Promise.all(persisted)).includes('completed'));
+  } finally {
+    observer.close();
+    other.close();
+    throwing.close();
+    await manager.terminateAll();
+  }
+});

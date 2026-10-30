@@ -903,15 +903,29 @@ index b56c9d5..463f665 100644
        role: "group",
        "aria-labelledby": `${id}-label`,
 diff --git a/node_modules/@astryxdesign/core/dist/Spinner/Spinner.js b/node_modules/@astryxdesign/core/dist/Spinner/Spinner.js
-index 0c81fd3..cd61fc7 100644
+index 0c81fd3..51e9632 100644
 --- a/node_modules/@astryxdesign/core/dist/Spinner/Spinner.js
 +++ b/node_modules/@astryxdesign/core/dist/Spinner/Spinner.js
-@@ -205,8 +205,19 @@ function syncRotationPhase(svg) {
+@@ -174,11 +174,8 @@ function pinRingsToTimelineOrigin() {
+   flushScheduled = false;
+   const animations = [];
+   for (const svg of pendingRings) {
+-    // The animation now runs on the arc <circle>, a descendant of the ring
+-    // this ref sits on (#6253), so it needs subtree:true to be found here.
+-    animations.push(...svg.getAnimations({
+-      subtree: true
+-    }));
++    // The rotation runs on the ring's host span, not on the svg itself.
++    animations.push(...(svg.parentElement ?? svg).getAnimations());
+   }
+   pendingRings.clear();
+   for (const animation of animations) {
+@@ -205,8 +202,19 @@ function syncRotationPhase(svg) {
      flushScheduled = true;
      requestAnimationFrame(pinRingsToTimelineOrigin);
    }
-+  // Moving a mounted spinner (a list re-sorting its rows) restarts the arc's
-+  // CSS animation without running this ref again; pin the restarted one too.
++  // Moving a mounted spinner (a list re-sorting its rows) restarts its CSS
++  // animation without running this ref again; pin the restarted one too.
 +  const host = svg.parentElement ?? svg;
 +  const repin = (event) => {
 +    if (event.target !== host) return;
@@ -926,7 +940,27 @@ index 0c81fd3..cd61fc7 100644
    };
  }
  
-@@ -247,6 +258,16 @@ const styles = {
+@@ -214,18 +222,7 @@ function syncRotationPhase(svg) {
+ // Animation
+ // =============================================================================
+ 
+-/**
+- * Moves the dash around a stationary circle instead of rotating the whole
+- * ring. WebKit re-antialiases a rotating stroked shape's rounded cap
+- * (`strokeLinecap: 'round'`, below) slightly differently at each intermediate
+- * angle, which reads as a visible wobble on iOS Safari independent of
+- * compositing (#6253) — confirmed by a real-device test against this exact
+- * fix, since `willChange`/layer promotion alone (the earlier fix for #3617)
+- * only smooths the rotation's motion, not the per-frame stroke rasterization.
+- * A static circle with an animated `stroke-dashoffset` never rotates, so
+- * WebKit never re-rasterizes the cap at an intermediate angle at all.
+- */
+-const dashMotion = "x1wbvqyn-B";
++const rotation = "xqng64z-B";
+ 
+ // =============================================================================
+ // Styles
+@@ -247,6 +244,16 @@ const styles = {
      "--_spinner-ring-stroke": "x10qssua",
      "--_spinner-box-size": "x69vvuq",
      kmuXW: "x2lah0s",
@@ -943,6 +977,141 @@ index 0c81fd3..cd61fc7 100644
      $$css: true
    },
    circle: {
+@@ -464,7 +471,7 @@ export function Spinner({
+         ,
+         strokeDasharray: `${arcLength} ${circumference - arcLength}`,
+         ...{
+-          className: "xbh8q5q x1764fhq x1g0ag68 x1owpc8m xio8zfp xgw3ha0 x14qxm4i xnh0sag xa4qsjk x1nlxm0d x1esw782 xtve3lm x9tu13d xdv9ggb"
++          className: "xbh8q5q x1764fhq x1g0ag68 x1owpc8m xio8zfp xgw3ha0 xtve3lm x9tu13d xdv9ggb"
+         }
+       })]
+     })
+diff --git a/node_modules/@astryxdesign/core/dist/Toast/ToastViewport.js b/node_modules/@astryxdesign/core/dist/Toast/ToastViewport.js
+index bcc42ce..1ad2ef6 100644
+--- a/node_modules/@astryxdesign/core/dist/Toast/ToastViewport.js
++++ b/node_modules/@astryxdesign/core/dist/Toast/ToastViewport.js
+@@ -14,6 +14,7 @@
+  *   changes, update ToastViewport.test.tsx, Toast.doc.mjs, and Toast.stories.tsx.
+  */
+ import { isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
++import {createPortal} from 'react-dom';
+ import * as stylex from '@stylexjs/stylex';
+ import "../theme/tokens.stylex.js";
+ import { spacingVars, durationVars, easeVars } from "../theme/tokens.stylex.js";
+@@ -239,8 +240,9 @@ export function ToastViewport({
+   const toastsRef = useRef(toasts);
+   toastsRef.current = toasts;
+ 
+-  // Show the popover on mount so it enters the top layer.
+   const viewportRef = useRef(null);
++  const anchorRef = useRef(null);
++  const [portalHost, setPortalHost] = useState(null);
+   // Toast ids whose exit has begun — guards onHide from double-firing (see
+   // removeToast). Mirrors exitingIds state, readable synchronously.
+   const exitingIdsRef = useRef(new Set());
+@@ -424,20 +426,64 @@ export function ToastViewport({
+     insetStyle.insetInlineEnd = inset.end;
+   }
+ 
+-  // Show the popover on mount so it enters the top layer
+-  useEffect(() => {
+-    if (!isTopLayer) {
+-      return;
+-    }
++  // Keep one portal host when dialogs open/close: moving the host preserves
++  // toast timers, exit transitions, focus and React's delegated event handlers.
++  useLayoutEffect(() => {
++    const anchor = anchorRef.current;
++    if (!isTopLayer || !anchor) return;
++    const view = anchor.ownerDocument.defaultView;
++    // DOM shims and older browsers have no native top layer. Keep their
++    // inline viewport instead of querying unsupported pseudo-classes.
++    if (typeof viewportRef.current?.showPopover !== 'function' ||
++        !view?.CSS?.supports('selector(:modal)') ||
++        !view.CSS.supports('selector(:popover-open)')) return;
++    const host = anchor.ownerDocument.createElement('div');
++    host.style.display = 'contents';
++    setPortalHost(host);
++    return () => host.remove();
++  }, [isTopLayer]);
++
++  useLayoutEffect(() => {
+     const el = viewportRef.current;
+-    if (el && typeof el.showPopover === 'function') {
+-      try {
+-        el.showPopover();
+-      } catch {
+-        /* already showing */
++    const anchor = anchorRef.current;
++    if (!isTopLayer || !portalHost || !el || !anchor) return;
++    const doc = anchor.ownerDocument;
++    const sync = () => {
++      // A popover outside the active modal is inert even if it paints above
++      // the backdrop. Keep the viewport inside the modal AND reopen it after
++      // the modal enters the top layer (top-layer order ignores z-index).
++      const modal = doc.activeElement?.closest('dialog:modal') ??
++        Array.from(doc.querySelectorAll('dialog:modal')).at(-1);
++      const parent = modal ?? anchor.parentElement;
++      if (!parent) return;
++      const moved = portalHost.parentElement !== parent;
++      const focused = el.contains(doc.activeElement) ? doc.activeElement : null;
++      if (moved) {
++        el.hidePopover?.();
++        parent.appendChild(portalHost);
+       }
+-    }
+-  }, [isTopLayer]);
++      if (toasts.length > 0 && !el.matches(':popover-open')) {
++        el.showPopover?.();
++      } else if (toasts.length === 0 && el.matches(':popover-open')) {
++        el.hidePopover?.();
++      }
++      if (moved && focused instanceof HTMLElement) focused.focus();
++    };
++    sync();
++    const observer = new MutationObserver(records => {
++      if (records.some(record => record.type === 'attributes'
++        ? record.target instanceof HTMLDialogElement
++        : [...record.addedNodes, ...record.removedNodes].some(node =>
++            node instanceof Element &&
++            (node.matches('dialog') || node.querySelector('dialog'))))) {
++        sync();
++      }
++    });
++    observer.observe(doc.documentElement, {
++      subtree: true, childList: true, attributes: true, attributeFilter: ['open'],
++    });
++    return () => observer.disconnect();
++  }, [isTopLayer, portalHost, toasts]);
+ 
+   // F6 jumps focus into the toast viewport — the standard "go to
+   // notifications" affordance. Focus the first control in the newest toast,
+@@ -479,9 +525,7 @@ export function ToastViewport({
+   }, [hasToasts, getFocusable]);
+   const posStyle = position === 'topEnd' ? styles.topEnd : position === 'topStart' ? styles.topStart : position === 'bottomStart' ? styles.bottomStart : styles.bottomEnd;
+   const isReversed = position === 'topEnd' || position === 'topStart';
+-  return /*#__PURE__*/_jsxs(ToastContext, {
+-    value: contextValue,
+-    children: [children, /*#__PURE__*/_jsx("div", {
++  const viewport = /*#__PURE__*/_jsx("div", {
+       ref: viewportRef,
+       role: hasToasts ? 'region' : undefined,
+       "aria-label": hasToasts ? t('@astryx.toast.viewport') : undefined,
+@@ -500,7 +544,12 @@ export function ToastViewport({
+         onExited: handleExited,
+         onDismiss: removeToast
+       }, entry.id))
+-    })]
++    });
++  return /*#__PURE__*/_jsxs(ToastContext, {
++    value: contextValue,
++    children: [children,
++      isTopLayer ? /*#__PURE__*/_jsx("span", {hidden: true, ref: anchorRef}) : null,
++      isTopLayer && portalHost ? createPortal(viewport, portalHost) : viewport]
+   });
+ }
+ ToastViewport.displayName = 'ToastViewport';
+\ No newline at end of file
 diff --git a/node_modules/@astryxdesign/core/dist/astryx.css b/node_modules/@astryxdesign/core/dist/astryx.css
 index 69573c6..7ed2bdc 100644
 --- a/node_modules/@astryxdesign/core/dist/astryx.css
@@ -2154,15 +2323,27 @@ index 6c581d4..d3a9857 100644
          <div
            id={`${id}-children`}
 diff --git a/node_modules/@astryxdesign/core/src/Spinner/Spinner.tsx b/node_modules/@astryxdesign/core/src/Spinner/Spinner.tsx
-index 7f7dedd..27dfa76 100644
+index 7f7dedd..0a8720a 100644
 --- a/node_modules/@astryxdesign/core/src/Spinner/Spinner.tsx
 +++ b/node_modules/@astryxdesign/core/src/Spinner/Spinner.tsx
-@@ -199,8 +199,19 @@ function syncRotationPhase(
+@@ -168,9 +168,8 @@ function pinRingsToTimelineOrigin(): void {
+   flushScheduled = false;
+   const animations: Animation[] = [];
+   for (const svg of pendingRings) {
+-    // The animation now runs on the arc <circle>, a descendant of the ring
+-    // this ref sits on (#6253), so it needs subtree:true to be found here.
+-    animations.push(...svg.getAnimations({subtree: true}));
++    // The rotation runs on the ring's host span, not on the svg itself.
++    animations.push(...(svg.parentElement ?? svg).getAnimations());
+   }
+   pendingRings.clear();
+   for (const animation of animations) {
+@@ -199,8 +198,19 @@ function syncRotationPhase(
      flushScheduled = true;
      requestAnimationFrame(pinRingsToTimelineOrigin);
    }
-+  // Moving a mounted spinner (a list re-sorting its rows) restarts the arc's
-+  // CSS animation without running this ref again; pin the restarted one too.
++  // Moving a mounted spinner (a list re-sorting its rows) restarts its CSS
++  // animation without running this ref again; pin the restarted one too.
 +  const host = svg.parentElement ?? svg;
 +  const repin = (event: AnimationEvent) => {
 +    if (event.target !== host) return;
@@ -2177,7 +2358,31 @@ index 7f7dedd..27dfa76 100644
    };
  }
  
-@@ -273,9 +284,24 @@ const styles = stylex.create({
+@@ -208,20 +218,9 @@ function syncRotationPhase(
+ // Animation
+ // =============================================================================
+ 
+-/**
+- * Moves the dash around a stationary circle instead of rotating the whole
+- * ring. WebKit re-antialiases a rotating stroked shape's rounded cap
+- * (`strokeLinecap: 'round'`, below) slightly differently at each intermediate
+- * angle, which reads as a visible wobble on iOS Safari independent of
+- * compositing (#6253) — confirmed by a real-device test against this exact
+- * fix, since `willChange`/layer promotion alone (the earlier fix for #3617)
+- * only smooths the rotation's motion, not the per-frame stroke rasterization.
+- * A static circle with an animated `stroke-dashoffset` never rotates, so
+- * WebKit never re-rasterizes the cap at an intermediate angle at all.
+- */
+-const dashMotion = stylex.keyframes({
+-  '0%': {strokeDashoffset: '0px'},
+-  '100%': {strokeDashoffset: `calc(var(${RESOLVED_DIAMETER}) * -${PI})`},
++const rotation = stylex.keyframes({
++  '0%': {transform: 'rotate(0deg)'},
++  '100%': {transform: 'rotate(360deg)'},
+ });
+ 
+ // =============================================================================
+@@ -273,9 +272,24 @@ const styles = stylex.create({
      // moment it sets `min-width: 0` on its items. A spinner that does not fit
      // overflows its host visibly instead of being silently sliced.
      flexShrink: 0,
@@ -2203,6 +2408,147 @@ index 7f7dedd..27dfa76 100644
      display: 'block',
      // The frame is the box, read from the same composed var the span is sized
      // from — not from the size constant, which a theme cannot reach, and not
+@@ -330,16 +344,6 @@ const styles = stylex.create({
+   // `0` the way the registered length pair guards against, so it needs no
+   // registration.
+   arc: {
+-    // Slow the motion dramatically under reduced-motion rather than freezing
+-    // it (a frozen spinner reads as broken), matching ProgressBar's approach.
+-    // The role="status" + "Loading" label still convey busy state (obs-6).
+-    animationDuration: {
+-      default: durationVars['--duration-slow-min'],
+-      '@media (prefers-reduced-motion: reduce)': '3s',
+-    },
+-    animationIterationCount: 'infinite',
+-    animationName: dashMotion,
+-    animationTimingFunction: 'linear',
+     stroke: 'var(--spinner-color)',
+     transform: 'rotate(-90deg)',
+     strokeDasharray: `calc(var(${RESOLVED_DIAMETER}) * ${PI} * var(--spinner-arc-fraction)) calc(var(${RESOLVED_DIAMETER}) * ${PI} * (1 - var(--spinner-arc-fraction)))`,
+diff --git a/node_modules/@astryxdesign/core/src/Toast/ToastViewport.tsx b/node_modules/@astryxdesign/core/src/Toast/ToastViewport.tsx
+index 62dbde6..012d6de 100644
+--- a/node_modules/@astryxdesign/core/src/Toast/ToastViewport.tsx
++++ b/node_modules/@astryxdesign/core/src/Toast/ToastViewport.tsx
+@@ -24,6 +24,7 @@ import {
+   useState,
+ } from 'react';
+ import type {ReactNode} from 'react';
++import {createPortal} from 'react-dom';
+ import * as stylex from '@stylexjs/stylex';
+ import {spacingVars, durationVars, easeVars} from '../theme/tokens.stylex';
+ import {mergeProps} from '../utils';
+@@ -314,8 +315,9 @@ export function ToastViewport({
+   const toastsRef = useRef(toasts);
+   toastsRef.current = toasts;
+ 
+-  // Show the popover on mount so it enters the top layer.
+   const viewportRef = useRef<HTMLDivElement>(null);
++  const anchorRef = useRef<HTMLSpanElement>(null);
++  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
+   // Toast ids whose exit has begun — guards onHide from double-firing (see
+   // removeToast). Mirrors exitingIds state, readable synchronously.
+   const exitingIdsRef = useRef<Set<string>>(new Set());
+@@ -527,20 +529,64 @@ export function ToastViewport({
+     insetStyle.insetInlineEnd = inset.end;
+   }
+ 
+-  // Show the popover on mount so it enters the top layer
+-  useEffect(() => {
+-    if (!isTopLayer) {
+-      return;
+-    }
++  // Keep one portal host when dialogs open/close: moving the host preserves
++  // toast timers, exit transitions, focus and React's delegated event handlers.
++  useLayoutEffect(() => {
++    const anchor = anchorRef.current;
++    if (!isTopLayer || !anchor) return;
++    const view = anchor.ownerDocument.defaultView;
++    // DOM shims and older browsers have no native top layer. Keep their
++    // inline viewport instead of querying unsupported pseudo-classes.
++    if (typeof viewportRef.current?.showPopover !== 'function' ||
++        !view?.CSS?.supports('selector(:modal)') ||
++        !view.CSS.supports('selector(:popover-open)')) return;
++    const host = anchor.ownerDocument.createElement('div');
++    host.style.display = 'contents';
++    setPortalHost(host);
++    return () => host.remove();
++  }, [isTopLayer]);
++
++  useLayoutEffect(() => {
+     const el = viewportRef.current;
+-    if (el && typeof el.showPopover === 'function') {
+-      try {
+-        el.showPopover();
+-      } catch {
+-        /* already showing */
++    const anchor = anchorRef.current;
++    if (!isTopLayer || !portalHost || !el || !anchor) return;
++    const doc = anchor.ownerDocument;
++    const sync = () => {
++      // A popover outside the active modal is inert even if it paints above
++      // the backdrop. Keep the viewport inside the modal AND reopen it after
++      // the modal enters the top layer (top-layer order ignores z-index).
++      const modal = doc.activeElement?.closest('dialog:modal') ??
++        Array.from(doc.querySelectorAll('dialog:modal')).at(-1);
++      const parent = modal ?? anchor.parentElement;
++      if (!parent) return;
++      const moved = portalHost.parentElement !== parent;
++      const focused = el.contains(doc.activeElement) ? doc.activeElement : null;
++      if (moved) {
++        el.hidePopover?.();
++        parent.appendChild(portalHost);
+       }
+-    }
+-  }, [isTopLayer]);
++      if (toasts.length > 0 && !el.matches(':popover-open')) {
++        el.showPopover?.();
++      } else if (toasts.length === 0 && el.matches(':popover-open')) {
++        el.hidePopover?.();
++      }
++      if (moved && focused instanceof HTMLElement) focused.focus();
++    };
++    sync();
++    const observer = new MutationObserver(records => {
++      if (records.some(record => record.type === 'attributes'
++        ? record.target instanceof HTMLDialogElement
++        : [...record.addedNodes, ...record.removedNodes].some(node =>
++            node instanceof Element &&
++            (node.matches('dialog') || node.querySelector('dialog'))))) {
++        sync();
++      }
++    });
++    observer.observe(doc.documentElement, {
++      subtree: true, childList: true, attributes: true, attributeFilter: ['open'],
++    });
++    return () => observer.disconnect();
++  }, [isTopLayer, portalHost, toasts]);
+ 
+   // F6 jumps focus into the toast viewport — the standard "go to
+   // notifications" affordance. Focus the first control in the newest toast,
+@@ -591,9 +637,7 @@ export function ToastViewport({
+           : styles.bottomEnd;
+   const isReversed = position === 'topEnd' || position === 'topStart';
+ 
+-  return (
+-    <ToastContext value={contextValue}>
+-      {children}
++  const viewport = (
+       <div
+         ref={viewportRef}
+         role={hasToasts ? 'region' : undefined}
+@@ -619,6 +663,12 @@ export function ToastViewport({
+           />
+         ))}
+       </div>
++  );
++  return (
++    <ToastContext value={contextValue}>
++      {children}
++      {isTopLayer ? <span hidden ref={anchorRef} /> : null}
++      {isTopLayer && portalHost ? createPortal(viewport, portalHost) : viewport}
+     </ToastContext>
+   );
+ }
 diff --git a/node_modules/@astryxdesign/core/src/hooks/useStreamingText.ts b/node_modules/@astryxdesign/core/src/hooks/useStreamingText.ts
 index 55b441e..7aa4174 100644
 --- a/node_modules/@astryxdesign/core/src/hooks/useStreamingText.ts

@@ -31,6 +31,8 @@ export interface RuntimeMessageRunIdentity {
 /** Lease bridge owned by the Runtime Host for one live root run. */
 export interface RuntimeMessageRunOwner extends RuntimeMessageRunIdentity {
   pull(): Promise<readonly SteeringLease[]>;
+  /** Event-driven notification only; pull/ack/nack retain exclusive consumption authority. */
+  waitForSteering?(signal: AbortSignal): Promise<void>;
   ack(leaseIds: readonly string[]): void;
   nack(leaseIds: readonly string[]): void;
   /** Ends Runtime access; the Host closes admission at its terminal transition cut. */
@@ -63,7 +65,14 @@ export interface RuntimeHostedRootExecutionInput extends RuntimeMessageRunIdenti
 /** Host-only root lifecycle capability. Embedded compositions must omit it. */
 export interface RuntimeHostedRootAuthority extends RuntimeMessageAuthority {
   executeRoot(input: RuntimeHostedRootExecutionInput): Promise<void>;
+  /** Stops the Session's live execution, including a claim whose Run has not attached. */
   stopRoot(identity: RuntimeMessageRunIdentity, input?: StopSessionInput): Promise<void>;
+  /**
+   * Stops only this exact Run's Runtime owner, for an activation-scoped graph
+   * stop. Kept separate from `stopRoot` so an authority cannot satisfy it by
+   * ignoring an option and silently widening to a Session stop.
+   */
+  stopRootRun(identity: RuntimeMessageRunIdentity, input?: StopSessionInput): Promise<void>;
   stopSession(sessionId: string, input?: StopSessionInput): Promise<void>;
 }
 

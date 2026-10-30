@@ -630,6 +630,70 @@ describe('filesystem worker Linux path context', () => {
   });
 });
 
+describe('filesystem worker Windows Glob path context', () => {
+  test('keeps the caller cancellation signal on a non-following Glob launch', async () => {
+    const workspace = await temporaryDirectory('maka-windows-worker-glob-cancel-');
+    const { client, processInputs, transforms } = fakeClient({ platform: 'win32' });
+    const abort = new AbortController();
+
+    await client.execute({
+      operation: { kind: 'glob', path: workspace, pattern: '**/*.ts' },
+      cwd: workspace,
+      mode: 'ask',
+      expectedIdentity: 'unchecked',
+      abortSignal: abort.signal,
+    });
+
+    assert.equal(processInputs[0]?.abortSignal, abort.signal);
+    assert.equal(transforms[0]?.command.pathContext.windowsNonFollowingReadRoot, workspace);
+  });
+
+  test('marks only the approved Glob subtree for non-following broker admission', async () => {
+    const workspace = await temporaryDirectory('maka-windows-worker-glob-');
+    const { client, transforms } = fakeClient({ platform: 'win32' });
+
+    await client.execute({
+      operation: { kind: 'glob', path: workspace, pattern: '**/*.ts' },
+      cwd: workspace,
+      mode: 'ask',
+      expectedIdentity: 'unchecked',
+    });
+
+    assert.equal(transforms[0]?.command.pathContext.windowsNonFollowingReadRoot, workspace);
+  });
+
+  test('does not mark other operations or a non-Windows Glob', async () => {
+    const workspace = await temporaryDirectory('maka-worker-non-following-scope-');
+    const file = join(workspace, 'main.ts');
+    await writeFile(file, 'export const value = true;\n');
+    const windows = fakeClient({ platform: 'win32' });
+
+    await windows.client.execute({
+      operation: { kind: 'read', path: file },
+      cwd: workspace,
+      mode: 'ask',
+      expectedIdentity: 'unchecked',
+    });
+    await windows.client.execute({
+      operation: grepOperation(workspace),
+      cwd: workspace,
+      mode: 'ask',
+      expectedIdentity: 'unchecked',
+    });
+    assert.equal(windows.transforms[0]?.command.pathContext.windowsNonFollowingReadRoot, undefined);
+    assert.equal(windows.transforms[1]?.command.pathContext.windowsNonFollowingReadRoot, undefined);
+
+    const mac = fakeClient({ platform: 'darwin' });
+    await mac.client.execute({
+      operation: { kind: 'glob', path: workspace, pattern: '**/*.ts' },
+      cwd: workspace,
+      mode: 'ask',
+      expectedIdentity: 'unchecked',
+    });
+    assert.equal(mac.transforms[0]?.command.pathContext.windowsNonFollowingReadRoot, undefined);
+  });
+});
+
 function fakeClient(
   options: {
     operationErrorCode?: FilesystemWorkerErrorCode;
@@ -645,22 +709,27 @@ function fakeClient(
   const requests: FilesystemWorkerRequest[] = [];
   const transforms: SandboxTransformRequest[] = [];
   const platform = options.platform ?? 'darwin';
-  const sandboxManager =
+  const sandboxManager: SandboxManager =
     platform === 'linux'
       ? new SandboxManager([
           new LinuxBubblewrapBackend({
             capability: { available: true, bwrapPath: '/usr/bin/bwrap' },
           }),
         ])
-      : new SandboxManager([new MacosSeatbeltBackend()]);
+      : platform === 'win32'
+        ? windowsRecordingSandboxManager(transforms)
+        : new SandboxManager([new MacosSeatbeltBackend()]);
   const processInputs: FilesystemWorkerProcessRunInput[] = [];
   const client = new FilesystemWorkerClient({
-    sandboxManager: Object.assign(Object.create(sandboxManager), {
-      transform(request: SandboxTransformRequest): SandboxTransformResult {
-        transforms.push(request);
-        return sandboxManager.transform(request);
-      },
-    }) as SandboxManager,
+    sandboxManager:
+      platform === 'win32'
+        ? sandboxManager
+        : (Object.assign(Object.create(sandboxManager), {
+            transform(request: SandboxTransformRequest): SandboxTransformResult {
+              transforms.push(request);
+              return sandboxManager.transform(request);
+            },
+          }) as SandboxManager),
     platform,
     newId: () => `request-${requests.length + 1}`,
     getLaunchSpec: async () => {
@@ -669,9 +738,9 @@ function fakeClient(
         ok: true,
         spec: {
           program: '/usr/bin/node',
-          args: ['/runtime/filesystem-worker.js', '--grep-executable', '/usr/bin/rg'],
+          args: ['/runtime/filesystem-worker.mjs', '--grep-executable', '/usr/bin/rg'],
           env: {},
-          runtimeReadableRoots: ['/runtime/filesystem-worker.js'],
+          runtimeReadableRoots: ['/runtime/filesystem-worker.mjs'],
           executableRoots: ['/usr/bin/node', '/usr/bin/rg'],
         },
       };
@@ -709,6 +778,27 @@ function fakeClient(
     },
   });
   return { client, requests, transforms, processInputs };
+}
+
+function windowsRecordingSandboxManager(transforms: SandboxTransformRequest[]): SandboxManager {
+  return {
+    transform(request: SandboxTransformRequest): SandboxTransformResult {
+      transforms.push(request);
+      return {
+        ok: true,
+        exec: {
+          argv: ['maka-windows-sandbox.exe'],
+          cwd: request.command.cwd,
+          env: request.command.env,
+          sandboxType: 'windows',
+          effectiveProfile: request.command.profile,
+        },
+        sandboxType: 'windows',
+        requiresSandbox: true,
+        preference: request.preference ?? 'auto',
+      };
+    },
+  } as unknown as SandboxManager;
 }
 
 function fakeResult(request: FilesystemWorkerRequest): FilesystemWorkerResult {
@@ -787,9 +877,9 @@ describe('filesystem worker client dispatch classification', () => {
         ok: true,
         spec: {
           program: '/usr/bin/node',
-          args: ['/runtime/filesystem-worker.js', '--grep-executable', '/usr/bin/rg'],
+          args: ['/runtime/filesystem-worker.mjs', '--grep-executable', '/usr/bin/rg'],
           env: {},
-          runtimeReadableRoots: ['/runtime/filesystem-worker.js'],
+          runtimeReadableRoots: ['/runtime/filesystem-worker.mjs'],
           executableRoots: ['/usr/bin/node', '/usr/bin/rg'],
         },
       }),
@@ -882,9 +972,9 @@ describe('filesystem worker client dispatch classification', () => {
         ok: true,
         spec: {
           program: '/usr/bin/node',
-          args: ['/runtime/filesystem-worker.js', '--grep-executable', '/usr/bin/rg'],
+          args: ['/runtime/filesystem-worker.mjs', '--grep-executable', '/usr/bin/rg'],
           env: {},
-          runtimeReadableRoots: ['/runtime/filesystem-worker.js'],
+          runtimeReadableRoots: ['/runtime/filesystem-worker.mjs'],
           executableRoots: ['/usr/bin/node', '/usr/bin/rg'],
         },
       }),
@@ -940,9 +1030,9 @@ describe('filesystem worker client dispatch classification', () => {
         ok: true,
         spec: {
           program: '/usr/bin/node',
-          args: ['/runtime/filesystem-worker.js', '--grep-executable', '/usr/bin/rg'],
+          args: ['/runtime/filesystem-worker.mjs', '--grep-executable', '/usr/bin/rg'],
           env: {},
-          runtimeReadableRoots: ['/runtime/filesystem-worker.js'],
+          runtimeReadableRoots: ['/runtime/filesystem-worker.mjs'],
           executableRoots: ['/usr/bin/node', '/usr/bin/rg'],
         },
       }),

@@ -17,6 +17,8 @@
  * under the License.
  */
 
+import { PersonalAssistantEnableSwitch } from '../features/personal-assistant/index.js';
+import { CheckinDefaultModelHint, CheckinEnableSwitch } from '../features/conversation/index.js';
 import { JevSettingsSection } from '../features/jev-settings';
 import { useEffect, useMemo, useState } from "react";
 import { PersonalizationSettingsSection } from "./personalization-settings-section";
@@ -48,6 +50,7 @@ import {
   ModelPicker,
   PermissionModeSelect,
   Selector,
+  StatusDot,
   Switch,
   modelChoiceValue,
   modelMenuGroups,
@@ -291,6 +294,37 @@ export function GeneralSettingsPage(props: {
             />
           }
         />
+        <SettingsRow
+          label={copy.personalAssistant}
+          description={copy.personalAssistantHelp}
+          end={host && runtimeHostTargetVerified ? (
+            <RuntimeHostSettingsGenerationBoundary>
+              <PersonalAssistantEnableSwitch
+                host={host}
+                label={copy.personalAssistant}
+                isLabelHidden
+                isDisabled={!runtimeHostSettingsInteractive}
+              />
+            </RuntimeHostSettingsGenerationBoundary>
+          ) : (
+            <Switch label={copy.personalAssistant} isLabelHidden value={false} isDisabled />
+          )}
+        />
+        <SettingsRow
+          label={copy.checkin}
+          description={copy.checkinHelp}
+          end={
+            <>
+              <CheckinDefaultModelHint hasDefaultModel={props.defaultSlug !== null}>
+                <span className="settingsStatus" role="status">
+                  <StatusDot variant="warning" label={copy.checkinNeedsDefaultModel} />
+                  <span>{copy.checkinNeedsDefaultModel}</span>
+                </span>
+              </CheckinDefaultModelHint>
+              <CheckinEnableSwitch label={copy.checkin} />
+            </>
+          }
+        />
       </SettingsSection>
       {showRuntimeHostDefaults ? (
         <GeneralDefaultsCard
@@ -395,6 +429,9 @@ function ShellSettingsSection(props: {
       await props.onUpdate({
         shell: { preference, executable: normalizedExecutable },
       });
+      // The save action disappears once the draft matches what was saved, so
+      // the confirmation has to come from somewhere else.
+      if (mountedRef.current) toast.success(copy.shellSaved);
     } catch (error) {
       if (mountedRef.current) {
         toast.error(
@@ -450,15 +487,20 @@ function ShellSettingsSection(props: {
           />
         </SettingsField>
       ) : null}
-      <SettingsActions>
-        <Button
-          variant="secondary"
-          isDisabled={!canSave || !props.isInteractive}
-          isLoading={saving}
-          onClick={() => void save()}
-          label={saving ? copy.savingShell : dirty ? copy.saveShell : copy.shellSaved}
-        />
-      </SettingsActions>
+      {/* Only while there is something to save. A permanent disabled
+          "已保存" button took a row of its own under the select even in the
+          default auto mode, where there is never anything to confirm. */}
+      {dirty || saving ? (
+        <SettingsActions>
+          <Button
+            variant="secondary"
+            isDisabled={!canSave || !props.isInteractive}
+            isLoading={saving}
+            onClick={() => void save()}
+            label={saving ? copy.savingShell : copy.saveShell}
+          />
+        </SettingsActions>
+      ) : null}
     </SettingsSection>
   );
 }

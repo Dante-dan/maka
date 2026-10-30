@@ -76,6 +76,8 @@ import { resolveModelRuntime } from '@maka/runtime/model-runtime';
 import { type BackendFactoryContext } from '@maka/runtime/session-manager';
 import { type GoalEvaluatorResource } from '@maka/runtime/goal-evaluator';
 import { type ModelMessage } from '@maka/runtime/model-protocol';
+import { type ModelCallAttemptStatus } from '@maka/core/model-call-attempt';
+import { NO_RUN_TURN_ID, type UsageUnknownModelCallRecord } from '@maka/storage/model-call-ledger';
 import {
   memoryExtractionMaxOutputTokens,
   type MemoryExtractionSourceSnapshot,
@@ -89,6 +91,7 @@ import {
   type HostOAuthExecutionBinding,
 } from './oauth-execution-authority.js';
 import { toRuntimePolicyProxy } from './runtime-policy-proxy.js';
+import type { HostCheckinModelResult, HostSessionCheckinPorts } from './session-checkin.js';
 
 export interface HostGoalEvaluatorInput {
   readonly runtimePolicy: RuntimePolicyStoresWriter;
@@ -432,6 +435,49 @@ export function createHostPromptSuggestionModel(input: HostSessionEffectModelInp
   };
 }
 
+const CHECKIN_MAX_OUTPUT_TOKENS = 2_048;
+const CHECKIN_REASONING_MAX_OUTPUT_TOKENS = 8_192;
+
+/**
+ * Creates the root-scoped check-in call. It reads many Sessions, so it runs on
+ * the user's default model (resolved by the coordinator before any read)
+ * rather than borrowing any one Session's.
+ */
+export function createHostCheckinModel(input: HostSessionEffectModelInput) {
+  const authority = createAuxiliaryModelCallAuthority(input);
+  return async ({
+    target,
+    prompt,
+    abortSignal,
+  }: Parameters<HostSessionCheckinPorts['generate']>[0]): Promise<HostCheckinModelResult> => {
+    try {
+      const callId = authority.newId();
+      const result = await runHostAuxiliaryModelCall(authority, {
+        transportContextId: callId,
+        header: target,
+        callKind: 'session_checkin',
+        callId: `session_checkin_${callId}`,
+        abortSignal,
+        reasoning: 'least',
+        buildRequest: (_target, thinkingLevel) => ({
+          prompt,
+          maxOutputTokens:
+            thinkingLevel === 'off'
+              ? CHECKIN_MAX_OUTPUT_TOKENS
+              : CHECKIN_REASONING_MAX_OUTPUT_TOKENS,
+          maxRetries: 0,
+        }),
+      });
+      return result.finishReason === 'length'
+        ? { ok: false, errorClass: 'invalid_response' }
+        : { ok: true, text: result.text };
+    } catch (error) {
+      const errorClass = auxiliaryModelErrorClass(error, abortSignal);
+      return { ok: false, errorClass: errorClass === 'persistence' ? 'unknown' : errorClass };
+    }
+  };
+}
+
 /** Creates tool-free Session title and recap calls on canonical Host model authority. */
 export function createHostSessionEffectModel(
   input: HostSessionEffectModelInput,
@@ -560,6 +606,9 @@ interface AuxiliaryModelCallAuthority {
       record: Parameters<InteractiveUsageStoresWriter['telemetry']['recordLlmCall']>[0],
     ): Promise<void>;
   };
+  readonly modelCalls: {
+    recordUsageUnknownAttempt(record: UsageUnknownModelCallRecord): Promise<void>;
+  };
   readonly requestDrain: () => void;
   readonly now: () => number;
   readonly newId: () => string;
@@ -605,6 +654,16 @@ interface HostAuxiliaryModelCallInput {
   ) => AuxiliaryModelRequest;
 }
 
+/**
+ * Turn placeholder for canonical rows of calls no run owns: auxiliary calls
+ * happen outside any turn, and the ledger's countable rows require the column.
+ * The storage side records the rows' no-run ownership from this seam, so a
+ * failed auxiliary call cannot flip a hosted run to indeterminate (#5691) —
+ * including a hosted execution legally named like this placeholder
+ * (#5890 review).
+ */
+const AUXILIARY_TURN_ID = NO_RUN_TURN_ID;
+
 function createAuxiliaryModelCallAuthority(
   input: AuxiliaryModelCallAuthorityInput,
 ): AuxiliaryModelCallAuthority {
@@ -623,6 +682,16 @@ function createAuxiliaryModelCallAuthority(
       insertLlmCall: async (record) => {
         try {
           await input.usage.telemetry.recordLlmCall(record);
+        } catch (error) {
+          requestDrain();
+          throw error;
+        }
+      },
+    },
+    modelCalls: {
+      recordUsageUnknownAttempt: async (record) => {
+        try {
+          await input.usage.modelCalls.recordUsageUnknownAttempt(record);
         } catch (error) {
           requestDrain();
           throw error;
@@ -703,6 +772,34 @@ async function runHostAuxiliaryModelCall(
       modelId: target.model,
       startedAt,
     };
+    // Abort and error paths know no token counts: their canonical row says
+    // usage-unknown (`usageBasis: 'missing'`, no tokens) instead of posing as a
+    // free call (#5691). Auxiliary calls run outside any AgentRun, so the
+    // canonical writer is this store seam, not the run's event stream.
+    const recordUsageUnknown = async (
+      status: ModelCallAttemptStatus,
+      errorClass?: string,
+    ): Promise<void> => {
+      const completedAt = authority.now();
+      try {
+        await authority.modelCalls.recordUsageUnknownAttempt({
+          attemptId: input.callId,
+          completedAt,
+          ...(input.telemetrySessionId ? { sessionId: input.telemetrySessionId } : {}),
+          logicalCallId: input.callId,
+          turnId: AUXILIARY_TURN_ID,
+          callKind: input.callKind,
+          connectionSlug: target.connection.slug,
+          providerId: target.connection.providerType,
+          modelId: target.model,
+          latencyMs: Math.max(0, completedAt - startedAt),
+          status,
+          ...(errorClass ? { errorClass } : {}),
+        });
+      } catch (accountingError) {
+        throw new AuxiliaryModelCallLocalError('accounting', accountingError);
+      }
+    };
     let result:
       | Awaited<ReturnType<typeof generateToolFreeModelCall>>
       | Awaited<ReturnType<typeof generateProviderPrefixModelCall>>;
@@ -735,6 +832,13 @@ async function runHostAuxiliaryModelCall(
           : generateToolFreeModelCall({
               model,
               ...request,
+              stream: target.connection.providerType === 'openai-codex',
+              // Codex OAuth rejects max_output_tokens; its endpoint owns the
+              // output limit. Other providers keep the requested token budget.
+              maxOutputTokens:
+                target.connection.providerType === 'openai-codex'
+                  ? undefined
+                  : request.maxOutputTokens,
               abortSignal: input.abortSignal,
               providerOptions: request.providerOptions ?? providerOptions,
             });
@@ -743,21 +847,10 @@ async function runHostAuxiliaryModelCall(
       if (oauthFailure) throw oauthFailure;
     } catch (error) {
       const effectiveError = readDeferredOAuthFailure?.() ?? error;
-      try {
-        await recordLlmCallStrict(
-          { repo: authority.telemetry, lookupPricing: pricing },
-          {
-            ...baseRecord,
-            inputTokens: 0,
-            outputTokens: 0,
-            latencyMs: Math.max(0, authority.now() - startedAt),
-            status: input.abortSignal.aborted ? 'aborted' : 'error',
-            errorClass: evaluatorErrorClass(effectiveError),
-          },
-        );
-      } catch (accountingError) {
-        throw new AuxiliaryModelCallLocalError('accounting', accountingError);
-      }
+      await recordUsageUnknown(
+        input.abortSignal.aborted ? 'aborted' : 'failed',
+        evaluatorErrorClass(effectiveError),
+      );
       throw effectiveError;
     }
     try {
@@ -765,6 +858,12 @@ async function runHostAuxiliaryModelCall(
         { repo: authority.telemetry, lookupPricing: pricing },
         {
           ...baseRecord,
+          // A completion without reported usage stays on the legacy zero path:
+          // hosted execution settlement refuses any range containing
+          // usage-missing rows ('missing_attempt_usage'), so routing these
+          // rows to the canonical ledger marked every such hosted run
+          // indeterminate. The residual zero is known dishonesty, pending a
+          // ruling on that settlement coverage semantics (#5691).
           ...(result.usage
             ? llmCallUsageFields(result.usage)
             : { inputTokens: 0, outputTokens: 0 }),
@@ -1001,16 +1100,28 @@ async function resolveDailyReviewHeader(
       thinkingLevel: 'off',
     };
   }
+  const header = await resolveDefaultModelHeader(runtimePolicy);
+  if (!header) {
+    throw new AuxiliaryModelCallConfigurationError(
+      'Daily Review has no canonical default model target',
+    );
+  }
+  return header;
+}
+
+/** The connection and model the user chose as default, or undefined when none is set. */
+export async function resolveDefaultModelHeader(
+  runtimePolicy: RuntimePolicyStoresWriter,
+): Promise<
+  | Pick<SessionHeader, 'llmConnectionId' | 'llmConnectionSlug' | 'model' | 'thinkingLevel'>
+  | undefined
+> {
   const catalog = await runtimePolicy.connectionCatalog.getSnapshot();
   const target = catalog.defaultTarget;
   const connection = target
     ? catalog.connections.find((candidate) => candidate.connectionId === target.connectionId)
     : undefined;
-  if (!target || !connection) {
-    throw new AuxiliaryModelCallConfigurationError(
-      'Daily Review has no canonical default model target',
-    );
-  }
+  if (!target || !connection) return undefined;
   return {
     llmConnectionId: connection.connectionId,
     llmConnectionSlug: connection.slug,
@@ -1087,6 +1198,11 @@ export async function resolveExecutionTarget(
       ? {}
       : { defaultApiProtocol: resolved.connection.defaultApiProtocol }),
     defaultModel: model,
+    ...(resolved.connection.providerType === 'openai-codex' &&
+    resolved.connection.modelSource === 'fetched' &&
+    resolved.connection.modelsFetchedAt !== undefined
+      ? { codexCompactionMetadataFetchedAt: resolved.connection.modelsFetchedAt }
+      : {}),
     models: discovered
       ? [...resolved.connection.models]
       : [...resolved.connection.models, modelInfo],

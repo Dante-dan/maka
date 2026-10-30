@@ -23,15 +23,26 @@ export const RENDERER_RUNTIME_HOST_QUERY_OPERATIONS = [
   // Read-only, session-scoped, and already the owner of "what is the context
   // made of" for `/context` (#1580, #2323). Admitted on the same terms as the
   // inspect query beside it: it reads a projection and writes nothing.
+  'session.event-waits.query',
   'context.diagnostics.query',
   'daily-review.query',
   'execution.inspect.query',
   'scheduled-task.query',
+  // Read-only State Root and per-task size measurement; it reclaims nothing.
+  'storage.usage.query',
+  'storage.usage.sessions.query',
+  // The archived-task retention setting, its preview and latest results.
+  'storage.retention.query',
 ] as const satisfies readonly (keyof OperationSpecMap)[];
 
 export const RENDERER_RUNTIME_HOST_COMMAND_OPERATIONS = [
+  'session.event-wait.cancel',
   'daily-review.mutate',
+  'personal-assistant.call',
   'scheduled-task.mutate',
+  // The only writer of the retention setting. The Host stamps its time and
+  // fences it by revision; agent settings and config import never reach it.
+  'storage.retention.set',
   'web-search.execute',
 ] as const satisfies readonly (keyof OperationSpecMap)[];
 
